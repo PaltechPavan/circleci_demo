@@ -9,6 +9,7 @@ jobs:
       - image: cimg/aws:2025.01
 
     steps:
+
       - checkout
 
       - aws-cli/setup:
@@ -22,10 +23,39 @@ jobs:
             aws sts get-caller-identity
 
       - run:
-          name: Upload models to S3
+          name: Detect and deploy changed models
           command: |
-            echo "Uploading models to S3..."
-            aws s3 sync models/ s3://dummu-circleci-s3-bucket/models/
+            echo "Detecting changes..."
+
+            git diff --name-status HEAD^ HEAD -- models/
+
+            echo "Processing changed models..."
+
+            git diff --name-status HEAD^ HEAD -- models/ | while read -r status file
+            do
+              echo "Status: $status"
+              echo "File: $file"
+
+              case "$status" in
+
+                A|M)
+                  echo "Uploading: $file"
+                  aws s3 cp "$file" \
+                    "s3://dummy-circleci-s3-bucket/$file"
+                  ;;
+
+                D)
+                  echo "Deleting: $file"
+                  aws s3 rm \
+                    "s3://dummy-circleci-s3-bucket/$file"
+                  ;;
+
+                *)
+                  echo "Skipping status: $status"
+                  ;;
+
+              esac
+            done
 
 workflows:
   oidc-test:
