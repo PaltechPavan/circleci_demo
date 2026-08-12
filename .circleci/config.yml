@@ -21,6 +21,12 @@ jobs:
             echo "Checking AWS identity..."
             aws sts get-caller-identity
 
+      - run:
+          name: Upload models to S3
+          command: |
+            echo "Uploading models to S3..."
+            aws s3 sync models/ s3://dummy-circleci-s3-bucket/models/
+
 workflows:
   oidc-test:
     jobs:
