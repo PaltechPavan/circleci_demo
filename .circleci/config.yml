@@ -41,13 +41,13 @@ jobs:
                 A|M)
                   echo "Uploading: $file"
                   aws s3 cp "$file" \
-                    "s3://dummy-circleci-s3-bucket/$file"
+                    "s3://dummu-circleci-s3-bucket/$file"
                   ;;
 
                 D)
                   echo "Deleting: $file"
                   aws s3 rm \
-                    "s3://dummy-circleci-s3-bucket/$file"
+                    "s3://dummu-circleci-s3-bucket/$file"
                   ;;
 
                 *)
