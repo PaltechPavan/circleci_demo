@@ -1,1 +1,31 @@
+version: 2.1
 
+orbs:
+  aws-cli: circleci/aws-cli@5.4.1
+
+jobs:
+  aws-oidc-test:
+    docker:
+      - image: cimg/aws:2025.01
+
+    steps:
+      - checkout
+
+      - aws-cli/setup:
+          role_arn: "arn:aws:iam::008300323897:role/circle-ci-oidc-role"
+          region: "ap-south-1"
+
+      - run:
+          name: Verify AWS Identity
+          command: |
+            echo "Checking AWS identity..."
+            aws sts get-caller-identity
+
+workflows:
+  oidc-test:
+    jobs:
+      - aws-oidc-test:
+          filters:
+            branches:
+              only:
+                - main
