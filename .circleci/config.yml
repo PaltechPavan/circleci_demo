@@ -4,7 +4,7 @@ orbs:
   aws-cli: circleci/aws-cli@5.4.1
 
 jobs:
-  aws-oidc-test:
+  model-deploy:
     docker:
       - image: cimg/aws:2025.01
 
@@ -22,70 +22,32 @@ jobs:
             aws sts get-caller-identity
 
       - run:
-          name: Detect and deploy changed models
+          name: Show Models
           command: |
-            echo "======================================"
-            echo "Detecting changed models..."
-            echo "======================================"
+            echo "Models in GitHub:"
+            find models -type f -print
 
-            CHANGES=$(git diff --name-status HEAD^ HEAD -- models/)
+      - run:
+          name: Sync Models to S3
+          command: |
+            echo "Synchronizing models with S3..."
 
-            echo "$CHANGES"
+            aws s3 sync \
+              models/ \
+              s3://dummu-circleci-s3-bucket/models/ \
+              --delete
 
-            if [ -z "$CHANGES" ]; then
-              echo "No model changes detected."
-              exit 0
-            fi
-
-            echo ""
-            echo "======================================"
-            echo "Processing changed models..."
-            echo "======================================"
-
-            echo "$CHANGES" | while read -r status file
-            do
-              echo ""
-              echo "Status: $status"
-              echo "File: $file"
-
-              case "$status" in
-
-                A|M)
-                  echo "Uploading: $file"
-
-                  aws s3 cp "$file" \
-                    "s3://dummu-circleci-s3-bucket/$file"
-
-                  echo "Successfully uploaded: $file"
-                  ;;
-
-                D)
-                  echo "Deleting: $file"
-
-                  aws s3 rm \
-                    "s3://dummu-circleci-s3-bucket/$file"
-
-                  echo "Successfully deleted: $file"
-                  ;;
-
-                *)
-                  echo "Skipping status: $status"
-                  ;;
-
-              esac
-            done
-
-            echo ""
-            echo "======================================"
+      - run:
+          name: Verify S3 Models
+          command: |
             echo "Models currently in S3:"
-            echo "======================================"
-
-            aws s3 ls s3://dummu-circleci-s3-bucket/models/
+            aws s3 ls \
+              s3://dummu-circleci-s3-bucket/models/
 
 workflows:
-  oidc-test:
+  deploy:
     jobs:
-      - aws-oidc-test:
+      - model-deploy:
           filters:
             branches:
               only:
