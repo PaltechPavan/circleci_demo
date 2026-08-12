@@ -9,7 +9,6 @@ jobs:
       - image: cimg/aws:2025.01
 
     steps:
-
       - checkout
 
       - aws-cli/setup:
@@ -25,14 +24,27 @@ jobs:
       - run:
           name: Detect and deploy changed models
           command: |
-            echo "Detecting changes..."
+            echo "======================================"
+            echo "Detecting changed models..."
+            echo "======================================"
 
-            git diff --name-status HEAD^ HEAD -- models/
+            CHANGES=$(git diff --name-status HEAD^ HEAD -- models/)
 
+            echo "$CHANGES"
+
+            if [ -z "$CHANGES" ]; then
+              echo "No model changes detected."
+              exit 0
+            fi
+
+            echo ""
+            echo "======================================"
             echo "Processing changed models..."
+            echo "======================================"
 
-            git diff --name-status HEAD^ HEAD -- models/ | while read -r status file
+            echo "$CHANGES" | while read -r status file
             do
+              echo ""
               echo "Status: $status"
               echo "File: $file"
 
@@ -40,14 +52,20 @@ jobs:
 
                 A|M)
                   echo "Uploading: $file"
+
                   aws s3 cp "$file" \
                     "s3://dummu-circleci-s3-bucket/$file"
+
+                  echo "Successfully uploaded: $file"
                   ;;
 
                 D)
                   echo "Deleting: $file"
+
                   aws s3 rm \
                     "s3://dummu-circleci-s3-bucket/$file"
+
+                  echo "Successfully deleted: $file"
                   ;;
 
                 *)
@@ -56,6 +74,13 @@ jobs:
 
               esac
             done
+
+            echo ""
+            echo "======================================"
+            echo "Models currently in S3:"
+            echo "======================================"
+
+            aws s3 ls s3://dummu-circleci-s3-bucket/models/
 
 workflows:
   oidc-test:
