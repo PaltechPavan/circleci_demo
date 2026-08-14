@@ -2,6 +2,7 @@
 dialect = athena
 templater = jinja
 max_line_length = 120
+exclude_rules = AM04
 
 [sqlfluff:templater:jinja]
 apply_dbt_builtins = True
