@@ -1,0 +1,18 @@
+athena:
+  target: dev
+
+  outputs:
+    dev:
+      type: athena
+
+      region_name: ap-south-1
+
+      database: awsdatacatalog
+
+      schema: umed_raw_ehr_db
+
+      s3_staging_dir: s3://umed-practice-12345-raw/practice/
+
+      work_group: primary
+
+      threads: 4

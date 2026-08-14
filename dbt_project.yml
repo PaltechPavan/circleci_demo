@@ -1,0 +1,14 @@
+name: dbt_demo
+
+version: "1.0"
+
+config-version: 2
+
+profile: athena
+
+model-paths:
+  - models
+
+models:
+  dbt_demo:
+    +materialized: table
