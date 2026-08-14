@@ -1,3 +1,2 @@
 select *
-from patients_test
-;
+from patients_test;

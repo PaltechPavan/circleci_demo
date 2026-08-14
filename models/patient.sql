@@ -1,3 +1,2 @@
 select * 
-from docdb_search_patient_test
-;
+from docdb_search_patient_test;
