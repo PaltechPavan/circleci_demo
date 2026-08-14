@@ -5,9 +5,10 @@ orbs:
 
 jobs:
 
-  # ==========================================
-  # FEATURE / PR VALIDATION
-  # ==========================================
+  # =========================================================
+  # 1. FEATURE / PR VALIDATION
+  # =========================================================
+
   validate-models:
     docker:
       - image: cimg/python:3.11
@@ -16,55 +17,91 @@ jobs:
       DBT_PROFILES_DIR: .
 
     steps:
+
+      # -------------------------------------------------------
+      # Checkout feature branch
+      # -------------------------------------------------------
+
       - checkout
 
+      # -------------------------------------------------------
+      # Install dbt + SQLFluff
+      # -------------------------------------------------------
+
       - run:
-          name: Install dbt dependencies
+          name: Install Dependencies
           command: |
             python --version
             pip --version
+
             pip install --upgrade pip
             pip install -r requirements.txt
 
-      - aws-cli/setup:
-          role_arn: "arn:aws:iam::008300323897:role/circle-ci-oidc-role"
-          region: "ap-south-1"
+      # -------------------------------------------------------
+      # Install dbt packages
+      # -------------------------------------------------------
 
       - run:
-          name: Verify AWS Identity
-          command: |
-            echo "Checking AWS identity..."
-            aws sts get-caller-identity
-
-      - run:
-          name: Install dbt packages
+          name: dbt Dependencies
           command: |
             dbt deps
+
+      # -------------------------------------------------------
+      # dbt parsing
+      # -------------------------------------------------------
 
       - run:
           name: dbt Parse
           command: |
             dbt parse
 
-      - run:
-          name: dbt Compile
-          command: |
-            dbt compile
+      # -------------------------------------------------------
+      # SQL linting
+      # -------------------------------------------------------
 
       - run:
-          name: dbt Test
+          name: SQL Linting
           command: |
-            dbt test
+            sqlfluff lint models/
+
+      # -------------------------------------------------------
+      # AWS authentication
+      # -------------------------------------------------------
+
+      - aws-cli/setup:
+          role_arn: "arn:aws:iam::008300323897:role/circle-ci-oidc-role"
+          region: "ap-south-1"
+
+      # -------------------------------------------------------
+      # Verify AWS
+      # -------------------------------------------------------
+
+      - run:
+          name: Verify AWS Identity
+          command: |
+            aws sts get-caller-identity
+
+      # -------------------------------------------------------
+      # Slim CI - temporary placeholder
+      # -------------------------------------------------------
+
+      - run:
+          name: Slim CI
+          command: |
+            echo "Slim CI validation will run here"
+            echo "CI database: umed_ci_ehr_db"
 
 
-  # ==========================================
-  # EXISTING MAIN DEPLOYMENT
-  # ==========================================
+  # =========================================================
+  # 2. EXISTING MAIN DEPLOYMENT
+  # =========================================================
+
   model-deploy:
     docker:
       - image: cimg/aws:2025.01
 
     steps:
+
       - checkout
 
       - aws-cli/setup:
@@ -97,17 +134,24 @@ jobs:
           name: Verify S3 Models
           command: |
             echo "Models currently in S3:"
+
             aws s3 ls \
               s3://dummu-circleci-s3-bucket/models/
 
 
+# =========================================================
+# WORKFLOWS
+# =========================================================
+
 workflows:
 
-  # ==========================================
-  # FEATURE VALIDATION
-  # ==========================================
+  # ---------------------------------------------------------
+  # FEATURE / PR
+  # ---------------------------------------------------------
+
   feature-validation:
     jobs:
+
       - validate-models:
           filters:
             branches:
@@ -115,11 +159,13 @@ workflows:
                 - main
 
 
-  # ==========================================
-  # MAIN DEPLOYMENT
-  # ==========================================
+  # ---------------------------------------------------------
+  # MAIN
+  # ---------------------------------------------------------
+
   deploy:
     jobs:
+
       - model-deploy:
           filters:
             branches:

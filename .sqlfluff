@@ -1,0 +1,7 @@
+[sqlfluff]
+dialect = athena
+templater = jinja
+max_line_length = 120
+
+[sqlfluff:templater:jinja]
+apply_dbt_builtins = True
