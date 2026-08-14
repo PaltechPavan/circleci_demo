@@ -4,6 +4,62 @@ orbs:
   aws-cli: circleci/aws-cli@5.4.1
 
 jobs:
+
+  # ==========================================
+  # FEATURE / PR VALIDATION
+  # ==========================================
+  validate-models:
+    docker:
+      - image: cimg/python:3.11
+
+    environment:
+      DBT_PROFILES_DIR: .
+
+    steps:
+      - checkout
+
+      - run:
+          name: Install dbt dependencies
+          command: |
+            python --version
+            pip --version
+            pip install --upgrade pip
+            pip install -r requirements.txt
+
+      - aws-cli/setup:
+          role_arn: "arn:aws:iam::008300323897:role/circle-ci-oidc-role"
+          region: "ap-south-1"
+
+      - run:
+          name: Verify AWS Identity
+          command: |
+            echo "Checking AWS identity..."
+            aws sts get-caller-identity
+
+      - run:
+          name: Install dbt packages
+          command: |
+            dbt deps
+
+      - run:
+          name: dbt Parse
+          command: |
+            dbt parse
+
+      - run:
+          name: dbt Compile
+          command: |
+            dbt compile
+
+      - run:
+          name: dbt Test
+          command: |
+            dbt test
+
+
+  # ==========================================
+  # EXISTING MAIN DEPLOYMENT
+  # ==========================================
   model-deploy:
     docker:
       - image: cimg/aws:2025.01
@@ -44,7 +100,24 @@ jobs:
             aws s3 ls \
               s3://dummu-circleci-s3-bucket/models/
 
+
 workflows:
+
+  # ==========================================
+  # FEATURE VALIDATION
+  # ==========================================
+  feature-validation:
+    jobs:
+      - validate-models:
+          filters:
+            branches:
+              ignore:
+                - main
+
+
+  # ==========================================
+  # MAIN DEPLOYMENT
+  # ==========================================
   deploy:
     jobs:
       - model-deploy:
