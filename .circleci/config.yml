@@ -6,7 +6,7 @@ orbs:
 jobs:
 
   # =========================================================
-  # 1. FEATURE / PR VALIDATION
+  # FEATURE / PULL REQUEST VALIDATION
   # =========================================================
 
   validate-models:
@@ -18,82 +18,234 @@ jobs:
 
     steps:
 
-      # -------------------------------------------------------
-      # Checkout feature branch
-      # -------------------------------------------------------
+      # =====================================================
+      # 1. CHECKOUT
+      # =====================================================
 
       - checkout
 
-      # -------------------------------------------------------
-      # Install dbt + SQLFluff
-      # -------------------------------------------------------
+      # =====================================================
+      # 2. SHOW EXACT COMMIT BEING TESTED
+      # =====================================================
+
+      - run:
+          name: Verify Checkout and Commit
+          command: |
+            echo "========================================"
+            echo "Current Branch"
+            echo "========================================"
+
+            git branch --show-current
+
+            echo ""
+            echo "========================================"
+            echo "Current Commit"
+            echo "========================================"
+
+            git log -1 --oneline
+
+            echo ""
+            echo "========================================"
+            echo "Git Status"
+            echo "========================================"
+
+            git status
+
+      # =====================================================
+      # 3. SHOW PROJECT FILES
+      # =====================================================
+
+      - run:
+          name: Show Project Files
+          command: |
+            echo "========================================"
+            echo "Project Files"
+            echo "========================================"
+
+            find . -maxdepth 3 -type f | sort
+
+      # =====================================================
+      # 4. INSTALL PYTHON / DBT / SQLFLUFF
+      # =====================================================
 
       - run:
           name: Install Dependencies
           command: |
+            echo "========================================"
+            echo "Python Version"
+            echo "========================================"
+
             python --version
+
+            echo ""
+            echo "========================================"
+            echo "Pip Version"
+            echo "========================================"
+
             pip --version
 
+            echo ""
+            echo "========================================"
+            echo "Installing Dependencies"
+            echo "========================================"
+
             pip install --upgrade pip
+
             pip install -r requirements.txt
 
-      # -------------------------------------------------------
-      # Install dbt packages
-      # -------------------------------------------------------
+      # =====================================================
+      # 5. VERIFY DBT
+      # =====================================================
+
+      - run:
+          name: Verify dbt Installation
+          command: |
+            echo "========================================"
+            echo "dbt Version"
+            echo "========================================"
+
+            dbt --version
+
+      # =====================================================
+      # 6. INSTALL DBT PACKAGES
+      # =====================================================
 
       - run:
           name: dbt Dependencies
           command: |
+            echo "========================================"
+            echo "Running dbt deps"
+            echo "========================================"
+
             dbt deps
 
-      # -------------------------------------------------------
-      # dbt parsing
-      # -------------------------------------------------------
+      # =====================================================
+      # 7. DBT PARSE
+      # =====================================================
 
       - run:
           name: dbt Parse
           command: |
+            echo "========================================"
+            echo "Running dbt parse"
+            echo "========================================"
+
             dbt parse
 
-      # -------------------------------------------------------
-      # SQL linting
-      # -------------------------------------------------------
+      # =====================================================
+      # 8. SHOW EXACT MODEL CONTENT
+      #
+      # This is temporary debugging.
+      # It proves CircleCI is using the latest code.
+      # =====================================================
+
+      - run:
+          name: Show Model Files Being Tested
+          command: |
+            echo "========================================"
+            echo "Commit Being Tested"
+            echo "========================================"
+
+            git log -1 --oneline
+
+            echo ""
+            echo "========================================"
+            echo "Appointments Model"
+            echo "========================================"
+
+            if [ -f models/appointments.sql ]; then
+              cat models/appointments.sql
+            else
+              echo "appointments.sql not found"
+            fi
+
+            echo ""
+            echo "========================================"
+            echo "Patient Model"
+            echo "========================================"
+
+            if [ -f models/patient.sql ]; then
+              cat models/patient.sql
+            else
+              echo "patient.sql not found"
+            fi
+
+      # =====================================================
+      # 9. SQL LINTING
+      # =====================================================
 
       - run:
           name: SQL Linting
           command: |
+            echo "========================================"
+            echo "Running SQLFluff"
+            echo "========================================"
+
             sqlfluff lint models/
 
-      # -------------------------------------------------------
-      # AWS authentication
-      # -------------------------------------------------------
+      # =====================================================
+      # 10. AWS OIDC
+      #
+      # We keep this because Slim CI will need AWS access.
+      # At the moment it is only verifying the identity.
+      # =====================================================
 
       - aws-cli/setup:
           role_arn: "arn:aws:iam::008300323897:role/circle-ci-oidc-role"
           region: "ap-south-1"
 
-      # -------------------------------------------------------
-      # Verify AWS
-      # -------------------------------------------------------
+      # =====================================================
+      # 11. VERIFY AWS IDENTITY
+      # =====================================================
 
       - run:
           name: Verify AWS Identity
           command: |
+            echo "========================================"
+            echo "AWS Identity"
+            echo "========================================"
+
             aws sts get-caller-identity
 
-      # -------------------------------------------------------
-      # Slim CI - temporary placeholder
-      # -------------------------------------------------------
+      # =====================================================
+      # 12. SLIM CI
+      #
+      # TEMPORARY PLACEHOLDER
+      #
+      # We will replace this after creating:
+      #
+      # umed_ci_ehr_db
+      #
+      # and configuring the main manifest/state.
+      # =====================================================
 
       - run:
           name: Slim CI
           command: |
-            echo "Slim CI validation will run here"
-            echo "CI database: umed_ci_ehr_db"
+            echo "========================================"
+            echo "Slim CI"
+            echo "========================================"
+
+            echo "Slim CI will be configured in the next phase."
+
+            echo ""
+            echo "Development database:"
+            echo "umed_ci_ehr_db"
+
+            echo ""
+            echo "No production dbt run is executed here."
+
+            echo ""
+            echo "PR validation stage completed."
 
 
   # =========================================================
-  # 2. EXISTING MAIN DEPLOYMENT
+  # MAIN BRANCH - CURRENT DEPLOYMENT
+  #
+  # We are keeping your existing S3 deployment for now.
+  # Later this will become:
+  #
+  # main → Docker → ECR → deployment
   # =========================================================
 
   model-deploy:
@@ -102,23 +254,45 @@ jobs:
 
     steps:
 
+      # =====================================================
+      # CHECKOUT
+      # =====================================================
+
       - checkout
+
+      # =====================================================
+      # AWS OIDC
+      # =====================================================
 
       - aws-cli/setup:
           role_arn: "arn:aws:iam::008300323897:role/circle-ci-oidc-role"
           region: "ap-south-1"
 
+      # =====================================================
+      # VERIFY AWS
+      # =====================================================
+
       - run:
           name: Verify AWS Identity
           command: |
             echo "Checking AWS identity..."
+
             aws sts get-caller-identity
+
+      # =====================================================
+      # SHOW MODELS
+      # =====================================================
 
       - run:
           name: Show Models
           command: |
             echo "Models in GitHub:"
+
             find models -type f -print
+
+      # =====================================================
+      # SYNC MODELS TO S3
+      # =====================================================
 
       - run:
           name: Sync Models to S3
@@ -130,6 +304,10 @@ jobs:
               s3://dummu-circleci-s3-bucket/models/ \
               --delete
 
+      # =====================================================
+      # VERIFY S3
+      # =====================================================
+
       - run:
           name: Verify S3 Models
           command: |
@@ -139,15 +317,15 @@ jobs:
               s3://dummu-circleci-s3-bucket/models/
 
 
-# =========================================================
+# ===========================================================
 # WORKFLOWS
-# =========================================================
+# ===========================================================
 
 workflows:
 
-  # ---------------------------------------------------------
-  # FEATURE / PR
-  # ---------------------------------------------------------
+  # =========================================================
+  # FEATURE / PR VALIDATION
+  # =========================================================
 
   feature-validation:
     jobs:
@@ -159,9 +337,9 @@ workflows:
                 - main
 
 
-  # ---------------------------------------------------------
-  # MAIN
-  # ---------------------------------------------------------
+  # =========================================================
+  # MAIN DEPLOYMENT
+  # =========================================================
 
   deploy:
     jobs:
