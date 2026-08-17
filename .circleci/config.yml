@@ -25,7 +25,7 @@ jobs:
       - checkout
 
       # =====================================================
-      # 2. VERIFY CHECKOUT
+      # 2. VERIFY CHECKOUT AND COMMIT
       # =====================================================
 
       - run:
@@ -79,13 +79,6 @@ jobs:
 
             echo ""
             echo "========================================"
-            echo "Pip Version"
-            echo "========================================"
-
-            pip --version
-
-            echo ""
-            echo "========================================"
             echo "Installing Dependencies"
             echo "========================================"
 
@@ -107,7 +100,7 @@ jobs:
             dbt --version
 
       # =====================================================
-      # 6. INSTALL DBT PACKAGES
+      # 6. DBT DEPENDENCIES
       # =====================================================
 
       - run:
@@ -120,7 +113,7 @@ jobs:
             dbt deps
 
       # =====================================================
-      # 7. SHOW DBT PROJECT CONFIGURATION
+      # 7. SHOW DBT CONFIGURATION
       # =====================================================
 
       - run:
@@ -153,23 +146,14 @@ jobs:
             dbt parse
 
       # =====================================================
-      # 9. SHOW MODELS
-      #
-      # This tells us exactly which models dbt sees.
+      # 9. CHECK DBT MODELS
       # =====================================================
 
       - run:
           name: Check dbt Models
           command: |
             echo "========================================"
-            echo "All dbt Models"
-            echo "========================================"
-
-            dbt ls --resource-type model
-
-            echo ""
-            echo "========================================"
-            echo "Model Names Only"
+            echo "Available dbt Models"
             echo "========================================"
 
             dbt ls \
@@ -177,39 +161,24 @@ jobs:
               --output name
 
       # =====================================================
-      # 10. SHOW EXACT MODEL CONTENT
+      # 10. SHOW MODEL CONTENT
       # =====================================================
 
       - run:
-          name: Show Model Files Being Tested
+          name: Show Model Files
           command: |
-            echo "========================================"
-            echo "Commit Being Tested"
-            echo "========================================"
-
-            git log -1 --oneline
-
-            echo ""
             echo "========================================"
             echo "Appointments Model"
             echo "========================================"
 
-            if [ -f models/appointments.sql ]; then
-              cat models/appointments.sql
-            else
-              echo "appointments.sql not found"
-            fi
+            cat models/appointments.sql
 
             echo ""
             echo "========================================"
             echo "Patient Model"
             echo "========================================"
 
-            if [ -f models/patient.sql ]; then
-              cat models/patient.sql
-            else
-              echo "patient.sql not found"
-            fi
+            cat models/patient.sql
 
       # =====================================================
       # 11. SQL LINTING
@@ -245,134 +214,62 @@ jobs:
 
             aws sts get-caller-identity
 
-           # =====================================================
-      # 14. CHECK WHICH MODELS ARE ENABLED
+      # =====================================================
+      # 14. ACTUAL CI DBT RUN
+      #
+      # This is NOT a placeholder.
+      #
+      # It runs the models against:
+      #
+      # target: dev_ci
+      # database: umed_ci_ehr_db
+      #
       # =====================================================
 
       - run:
-          name: Check Enabled dbt Models
+          name: CI dbt Run
           command: |
             echo "========================================"
-            echo "dbt Models"
+            echo "CI dbt Run"
             echo "========================================"
 
-            dbt ls \
-              --resource-type model \
-              --output name
+            echo "Target: dev_ci"
+            echo "Database: umed_ci_ehr_db"
 
             echo ""
             echo "========================================"
-            echo "dbt Model Details"
+            echo "Running Appointments Model"
             echo "========================================"
 
-            dbt ls \
-              --resource-type model \
-              --output json
-
-      # =====================================================
-      # DEBUG DBT MODEL CONFIGURATION
-      # =====================================================
-
-      - run:
-          name: Debug dbt Model Configuration
-          command: |
-            echo "========================================"
-            echo "Appointments Model"
-            echo "========================================"
-
-            dbt ls \
+            dbt run \
+              --target dev_ci \
               --select appointments \
-              --output json
+              --no-partial-parse
 
             echo ""
             echo "========================================"
-            echo "Patient Model"
+            echo "Running Patient Model"
             echo "========================================"
 
-            dbt ls \
+            dbt run \
+              --target dev_ci \
               --select patient \
-              --output json
+              --no-partial-parse
 
             echo ""
             echo "========================================"
-            echo "All Models"
+            echo "CI dbt Run Completed"
             echo "========================================"
-
-            dbt ls \
-              --resource-type model \
-              --output name
-           # =====================================================
-      # VERIFY EXACT MODEL SELECTION
-      # =====================================================
-
-      - run:
-          name: Verify Model Selection
-          command: |
-            echo "========================================"
-            echo "Appointments Selection"
-            echo "========================================"
-
-            dbt ls \
-              --target dev_ci \
-              --select "model.dbt_demo.appointments"
-
-            echo ""
-            echo "========================================"
-            echo "Patient Selection"
-            echo "========================================"
-
-            dbt ls \
-              --target dev_ci \
-              --select "model.dbt_demo.patient"
-
-
-      # =====================================================
-      # TEST APPOINTMENTS MODEL
-      # =====================================================
-
-      - run:
-          name: Test Appointments Model
-          command: |
-            echo "========================================"
-            echo "Testing Appointments Model"
-            echo "========================================"
-
-            echo "Target: dev_ci"
-            echo "Database: umed_ci_ehr_db"
-
-            dbt run \
-              --target dev_ci \
-              --select "model.dbt_demo.appointments" \
-              --debug
-
-
-      # =====================================================
-      # TEST PATIENT MODEL
-      # =====================================================
-
-      - run:
-          name: Test Patient Model
-          command: |
-            echo "========================================"
-            echo "Testing Patient Model"
-            echo "========================================"
-
-            echo "Target: dev_ci"
-            echo "Database: umed_ci_ehr_db"
-
-            dbt run \
-              --target dev_ci \
-              --select "model.dbt_demo.patient" \
-              --debug
 
 
   # =========================================================
   # MAIN BRANCH DEPLOYMENT
   #
-  # CURRENTLY YOUR EXISTING S3 DEPLOYMENT
+  # Current:
+  # main → S3
   #
   # Later:
-  # main → Docker → ECR → deployment
+  # main → Docker → ECR → ECS/Fargate
   # =========================================================
 
   model-deploy:
@@ -402,7 +299,9 @@ jobs:
       - run:
           name: Verify AWS Identity
           command: |
-            echo "Checking AWS identity..."
+            echo "========================================"
+            echo "AWS Identity"
+            echo "========================================"
 
             aws sts get-caller-identity
 
@@ -413,7 +312,9 @@ jobs:
       - run:
           name: Show Models
           command: |
-            echo "Models in GitHub:"
+            echo "========================================"
+            echo "Models in GitHub"
+            echo "========================================"
 
             find models -type f -print
 
@@ -424,7 +325,9 @@ jobs:
       - run:
           name: Sync Models to S3
           command: |
-            echo "Synchronizing models with S3..."
+            echo "========================================"
+            echo "Synchronizing Models with S3"
+            echo "========================================"
 
             aws s3 sync \
               models/ \
@@ -438,7 +341,9 @@ jobs:
       - run:
           name: Verify S3 Models
           command: |
-            echo "Models currently in S3:"
+            echo "========================================"
+            echo "Models Currently in S3"
+            echo "========================================"
 
             aws s3 ls \
               s3://dummu-circleci-s3-bucket/models/
