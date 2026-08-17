@@ -25,7 +25,7 @@ jobs:
       - checkout
 
       # =====================================================
-      # 2. SHOW EXACT COMMIT BEING TESTED
+      # 2. VERIFY CHECKOUT
       # =====================================================
 
       - run:
@@ -65,7 +65,7 @@ jobs:
             find . -maxdepth 3 -type f | sort
 
       # =====================================================
-      # 4. INSTALL DBT + SQLFLUFF
+      # 4. INSTALL DEPENDENCIES
       # =====================================================
 
       - run:
@@ -120,7 +120,27 @@ jobs:
             dbt deps
 
       # =====================================================
-      # 7. DBT PARSE
+      # 7. SHOW DBT PROJECT CONFIGURATION
+      # =====================================================
+
+      - run:
+          name: Show dbt Configuration
+          command: |
+            echo "========================================"
+            echo "dbt Project"
+            echo "========================================"
+
+            cat dbt_project.yml
+
+            echo ""
+            echo "========================================"
+            echo "dbt Profile"
+            echo "========================================"
+
+            cat profiles.yml
+
+      # =====================================================
+      # 8. DBT PARSE
       # =====================================================
 
       - run:
@@ -133,7 +153,31 @@ jobs:
             dbt parse
 
       # =====================================================
-      # 8. SHOW EXACT MODEL CONTENT
+      # 9. SHOW MODELS
+      #
+      # This tells us exactly which models dbt sees.
+      # =====================================================
+
+      - run:
+          name: Check dbt Models
+          command: |
+            echo "========================================"
+            echo "All dbt Models"
+            echo "========================================"
+
+            dbt ls --resource-type model
+
+            echo ""
+            echo "========================================"
+            echo "Model Names Only"
+            echo "========================================"
+
+            dbt ls \
+              --resource-type model \
+              --output name
+
+      # =====================================================
+      # 10. SHOW EXACT MODEL CONTENT
       # =====================================================
 
       - run:
@@ -168,7 +212,7 @@ jobs:
             fi
 
       # =====================================================
-      # 9. SQL LINTING
+      # 11. SQL LINTING
       # =====================================================
 
       - run:
@@ -181,7 +225,7 @@ jobs:
             sqlfluff lint models/
 
       # =====================================================
-      # 10. AWS OIDC
+      # 12. AWS OIDC
       # =====================================================
 
       - aws-cli/setup:
@@ -189,7 +233,7 @@ jobs:
           region: "ap-south-1"
 
       # =====================================================
-      # 11. VERIFY AWS IDENTITY
+      # 13. VERIFY AWS IDENTITY
       # =====================================================
 
       - run:
@@ -202,15 +246,33 @@ jobs:
             aws sts get-caller-identity
 
       # =====================================================
-      # 12. TEST DBT IN CI DATABASE
+      # 14. VERIFY CI DATABASE
+      # =====================================================
+
+      - run:
+          name: Verify CI Athena Database
+          command: |
+            echo "========================================"
+            echo "Checking CI Athena Database"
+            echo "========================================"
+
+            aws athena start-query-execution \
+              --query-string "SHOW DATABASES" \
+              --work-group primary \
+              --query-execution-context Database=awsdatacatalog \
+              --result-configuration OutputLocation=s3://umed-practice-12345-raw/practice-ci/ \
+              > /tmp/query.json
+
+            cat /tmp/query.json
+
+      # =====================================================
+      # 15. CI DBT BUILD
       #
       # IMPORTANT:
-      # This runs against dev_ci from profiles.yml
-      # and therefore uses:
+      # This currently builds the models selected by dbt.
       #
-      # umed_ci_ehr_db
-      #
-      # It does NOT use production.
+      # Target = dev_ci
+      # Database = umed_ci_ehr_db
       # =====================================================
 
       - run:
@@ -221,18 +283,21 @@ jobs:
             echo "========================================"
 
             echo "Target: dev_ci"
-
             echo "Database: umed_ci_ehr_db"
 
-            dbt build --target dev_ci
+            echo ""
+
+            dbt build \
+              --target dev_ci \
+              --select "resource_type:model"
 
 
   # =========================================================
-  # MAIN BRANCH - CURRENT DEPLOYMENT
+  # MAIN BRANCH DEPLOYMENT
   #
-  # We are keeping your existing S3 deployment for now.
-  # Later this will become:
+  # CURRENTLY YOUR EXISTING S3 DEPLOYMENT
   #
+  # Later:
   # main → Docker → ECR → deployment
   # =========================================================
 
@@ -243,13 +308,13 @@ jobs:
     steps:
 
       # =====================================================
-      # CHECKOUT
+      # 1. CHECKOUT
       # =====================================================
 
       - checkout
 
       # =====================================================
-      # AWS OIDC
+      # 2. AWS OIDC
       # =====================================================
 
       - aws-cli/setup:
@@ -257,7 +322,7 @@ jobs:
           region: "ap-south-1"
 
       # =====================================================
-      # VERIFY AWS
+      # 3. VERIFY AWS
       # =====================================================
 
       - run:
@@ -268,7 +333,7 @@ jobs:
             aws sts get-caller-identity
 
       # =====================================================
-      # SHOW MODELS
+      # 4. SHOW MODELS
       # =====================================================
 
       - run:
@@ -279,7 +344,7 @@ jobs:
             find models -type f -print
 
       # =====================================================
-      # SYNC MODELS TO S3
+      # 5. SYNC MODELS TO S3
       # =====================================================
 
       - run:
@@ -293,7 +358,7 @@ jobs:
               --delete
 
       # =====================================================
-      # VERIFY S3
+      # 6. VERIFY S3
       # =====================================================
 
       - run:
