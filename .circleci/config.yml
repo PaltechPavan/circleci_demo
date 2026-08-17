@@ -269,7 +269,38 @@ jobs:
               --resource-type model \
               --output json
 
+      # =====================================================
+      # DEBUG DBT MODEL CONFIGURATION
+      # =====================================================
 
+      - run:
+          name: Debug dbt Model Configuration
+          command: |
+            echo "========================================"
+            echo "Appointments Model"
+            echo "========================================"
+
+            dbt ls \
+              --select appointments \
+              --output json
+
+            echo ""
+            echo "========================================"
+            echo "Patient Model"
+            echo "========================================"
+
+            dbt ls \
+              --select patient \
+              --output json
+
+            echo ""
+            echo "========================================"
+            echo "All Models"
+            echo "========================================"
+
+            dbt ls \
+              --resource-type model \
+              --output name
       # =====================================================
       # 15. TEST EACH MODEL EXPLICITLY
       # =====================================================
