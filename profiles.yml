@@ -1,8 +1,33 @@
 athena:
-  target: dev
+  target: dev_ci
 
   outputs:
-    dev:
+
+    # =====================================================
+    # DEVELOPMENT / CI
+    # =====================================================
+
+    dev_ci:
+      type: athena
+
+      region_name: ap-south-1
+
+      database: awsdatacatalog
+
+      schema: practice
+
+      s3_staging_dir: s3://umed-practice-12345-raw/practice-ci/
+
+      work_group: primary
+
+      threads: 4
+
+
+    # =====================================================
+    # PRODUCTION
+    # =====================================================
+
+    prod:
       type: athena
 
       region_name: ap-south-1
