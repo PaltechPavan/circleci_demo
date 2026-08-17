@@ -25,7 +25,7 @@ jobs:
       - checkout
 
       # =====================================================
-      # 2. VERIFY CHECKOUT AND COMMIT
+      # 2. VERIFY CHECKOUT
       # =====================================================
 
       - run:
@@ -43,13 +43,6 @@ jobs:
             echo "========================================"
 
             git log -1 --oneline
-
-            echo ""
-            echo "========================================"
-            echo "Git Status"
-            echo "========================================"
-
-            git status
 
       # =====================================================
       # 3. SHOW PROJECT FILES
@@ -72,15 +65,10 @@ jobs:
           name: Install Dependencies
           command: |
             echo "========================================"
-            echo "Python Version"
+            echo "Installing Dependencies"
             echo "========================================"
 
             python --version
-
-            echo ""
-            echo "========================================"
-            echo "Installing Dependencies"
-            echo "========================================"
 
             pip install --upgrade pip
 
@@ -161,27 +149,7 @@ jobs:
               --output name
 
       # =====================================================
-      # 10. SHOW MODEL CONTENT
-      # =====================================================
-
-      - run:
-          name: Show Model Files
-          command: |
-            echo "========================================"
-            echo "Appointments Model"
-            echo "========================================"
-
-            cat models/appointments.sql
-
-            echo ""
-            echo "========================================"
-            echo "Patient Model"
-            echo "========================================"
-
-            cat models/patient.sql
-
-      # =====================================================
-      # 11. SQL LINTING
+      # 10. SQL LINTING
       # =====================================================
 
       - run:
@@ -194,7 +162,7 @@ jobs:
             sqlfluff lint models/
 
       # =====================================================
-      # 12. AWS OIDC
+      # 11. AWS OIDC
       # =====================================================
 
       - aws-cli/setup:
@@ -202,7 +170,7 @@ jobs:
           region: "ap-south-1"
 
       # =====================================================
-      # 13. VERIFY AWS IDENTITY
+      # 12. VERIFY AWS
       # =====================================================
 
       - run:
@@ -215,15 +183,7 @@ jobs:
             aws sts get-caller-identity
 
       # =====================================================
-      # 14. ACTUAL CI DBT RUN
-      #
-      # This is NOT a placeholder.
-      #
-      # It runs the models against:
-      #
-      # target: dev_ci
-      # database: umed_ci_ehr_db
-      #
+      # 13. ACTUAL CI DBT RUN
       # =====================================================
 
       - run:
@@ -237,9 +197,7 @@ jobs:
             echo "Database: umed_ci_ehr_db"
 
             echo ""
-            echo "========================================"
             echo "Running Appointments Model"
-            echo "========================================"
 
             dbt run \
               --target dev_ci \
@@ -247,9 +205,7 @@ jobs:
               --no-partial-parse
 
             echo ""
-            echo "========================================"
             echo "Running Patient Model"
-            echo "========================================"
 
             dbt run \
               --target dev_ci \
@@ -263,12 +219,195 @@ jobs:
 
 
   # =========================================================
+  # MAIN BRANCH
+  #
+  # GENERATE DBT STATE / MANIFEST
+  # =========================================================
+
+  generate-dbt-state:
+    docker:
+      - image: cimg/python:3.11
+
+    environment:
+      DBT_PROFILES_DIR: .
+
+    steps:
+
+      # =====================================================
+      # 1. CHECKOUT MAIN
+      # =====================================================
+
+      - checkout
+
+      # =====================================================
+      # 2. VERIFY MAIN BRANCH
+      # =====================================================
+
+      - run:
+          name: Verify Main Branch
+          command: |
+            echo "========================================"
+            echo "Current Branch"
+            echo "========================================"
+
+            git branch --show-current
+
+            echo ""
+            echo "========================================"
+            echo "Current Commit"
+            echo "========================================"
+
+            git log -1 --oneline
+
+      # =====================================================
+      # 3. INSTALL DEPENDENCIES
+      # =====================================================
+
+      - run:
+          name: Install dbt Dependencies
+          command: |
+            echo "========================================"
+            echo "Installing dbt"
+            echo "========================================"
+
+            python --version
+
+            pip install --upgrade pip
+
+            pip install -r requirements.txt
+
+      # =====================================================
+      # 4. VERIFY DBT
+      # =====================================================
+
+      - run:
+          name: Verify dbt
+          command: |
+            echo "========================================"
+            echo "dbt Version"
+            echo "========================================"
+
+            dbt --version
+
+      # =====================================================
+      # 5. DBT DEPS
+      # =====================================================
+
+      - run:
+          name: dbt Dependencies
+          command: |
+            echo "========================================"
+            echo "Running dbt deps"
+            echo "========================================"
+
+            dbt deps
+
+      # =====================================================
+      # 6. GENERATE MANIFEST
+      # =====================================================
+
+      - run:
+          name: Generate Main dbt Manifest
+          command: |
+            echo "========================================"
+            echo "Generating Main dbt Manifest"
+            echo "========================================"
+
+            dbt parse \
+              --no-partial-parse
+
+      # =====================================================
+      # 7. VERIFY MANIFEST
+      # =====================================================
+
+      - run:
+          name: Verify Main Manifest
+          command: |
+            echo "========================================"
+            echo "Checking target directory"
+            echo "========================================"
+
+            ls -lah target/
+
+            echo ""
+            echo "========================================"
+            echo "Checking manifest.json"
+            echo "========================================"
+
+            if [ -f target/manifest.json ]; then
+              echo "SUCCESS: manifest.json exists"
+
+              ls -lh target/manifest.json
+            else
+              echo "ERROR: manifest.json was not created"
+              exit 1
+            fi
+
+      # =====================================================
+      # 8. AWS OIDC
+      # =====================================================
+
+      - aws-cli/setup:
+          role_arn: "arn:aws:iam::008300323897:role/circle-ci-oidc-role"
+          region: "ap-south-1"
+
+      # =====================================================
+      # 9. VERIFY AWS
+      # =====================================================
+
+      - run:
+          name: Verify AWS Identity
+          command: |
+            echo "========================================"
+            echo "AWS Identity"
+            echo "========================================"
+
+            aws sts get-caller-identity
+
+      # =====================================================
+      # 10. UPLOAD MANIFEST TO S3
+      # =====================================================
+
+      - run:
+          name: Upload Main Manifest to S3
+          command: |
+            echo "========================================"
+            echo "Uploading Main Manifest"
+            echo "========================================"
+
+            aws s3 cp \
+              target/manifest.json \
+              s3://dummu-circleci-s3-bucket/dbt-state/main/manifest.json
+
+      # =====================================================
+      # 11. VERIFY S3 MANIFEST
+      # =====================================================
+
+      - run:
+          name: Verify Manifest in S3
+          command: |
+            echo "========================================"
+            echo "S3 Main dbt State"
+            echo "========================================"
+
+            aws s3 ls \
+              s3://dummu-circleci-s3-bucket/dbt-state/main/
+
+            echo ""
+            echo "========================================"
+            echo "Main Manifest Successfully Stored"
+            echo "========================================"
+
+
+  # =========================================================
   # MAIN BRANCH DEPLOYMENT
   #
-  # Current:
+  # CURRENT:
+  #
   # main → S3
   #
-  # Later:
+  # FUTURE:
+  #
   # main → Docker → ECR → ECS/Fargate
   # =========================================================
 
@@ -376,7 +515,26 @@ workflows:
   deploy:
     jobs:
 
+      # -----------------------------------------------------
+      # FIRST:
+      # Generate main manifest and upload to S3
+      # -----------------------------------------------------
+
+      - generate-dbt-state:
+          filters:
+            branches:
+              only:
+                - main
+
+      # -----------------------------------------------------
+      # SECOND:
+      # Existing deployment
+      # -----------------------------------------------------
+
       - model-deploy:
+          requires:
+            - generate-dbt-state
+
           filters:
             branches:
               only:
