@@ -6,10 +6,22 @@ orbs:
 jobs:
 
   # =========================================================
-  # FEATURE / PULL REQUEST VALIDATION
+  # FEATURE / PR VALIDATION
+  #
+  # feature → PR → CircleCI
+  #
+  # Runs:
+  #   - dbt dependencies
+  #   - dbt parse
+  #   - SQLFluff
+  #   - Slim CI
+  #
+  # CI database:
+  #   awsdatacatalog.practice
   # =========================================================
 
   validate-models:
+
     docker:
       - image: cimg/python:3.11
 
@@ -18,7 +30,15 @@ jobs:
 
     steps:
 
+      # =====================================================
+      # 1. CHECKOUT
+      # =====================================================
+
       - checkout
+
+      # =====================================================
+      # 2. VERIFY CHECKOUT
+      # =====================================================
 
       - run:
           name: Verify Checkout and Commit
@@ -26,19 +46,28 @@ jobs:
             echo "========================================"
             echo "Current Branch"
             echo "========================================"
+
             git branch --show-current
 
             echo ""
+
             echo "========================================"
             echo "Current Commit"
             echo "========================================"
+
             git log -1 --oneline
 
             echo ""
+
             echo "========================================"
             echo "Git Status"
             echo "========================================"
+
             git status
+
+      # =====================================================
+      # 3. SHOW PROJECT FILES
+      # =====================================================
 
       - run:
           name: Show Project Files
@@ -46,29 +75,61 @@ jobs:
             echo "========================================"
             echo "Project Files"
             echo "========================================"
+
             find . -maxdepth 3 -type f | sort
+
+      # =====================================================
+      # 4. INSTALL DEPENDENCIES
+      # =====================================================
 
       - run:
           name: Install Dependencies
           command: |
             echo "========================================"
+            echo "Python Version"
+            echo "========================================"
+
+            python --version
+
+            echo ""
+
+            echo "========================================"
             echo "Installing Dependencies"
             echo "========================================"
-            python --version
-            pip --version
 
             pip install --upgrade pip
+
             pip install -r requirements.txt
+
+      # =====================================================
+      # 5. VERIFY DBT
+      # =====================================================
 
       - run:
           name: Verify dbt Installation
           command: |
+            echo "========================================"
+            echo "dbt Version"
+            echo "========================================"
+
             dbt --version
+
+      # =====================================================
+      # 6. DBT DEPENDENCIES
+      # =====================================================
 
       - run:
           name: dbt Dependencies
           command: |
+            echo "========================================"
+            echo "Running dbt deps"
+            echo "========================================"
+
             dbt deps
+
+      # =====================================================
+      # 7. SHOW DBT CONFIGURATION
+      # =====================================================
 
       - run:
           name: Show dbt Configuration
@@ -76,13 +137,20 @@ jobs:
             echo "========================================"
             echo "dbt Project"
             echo "========================================"
+
             cat dbt_project.yml
 
             echo ""
+
             echo "========================================"
             echo "dbt Profile"
             echo "========================================"
+
             cat profiles.yml
+
+      # =====================================================
+      # 8. DBT PARSE
+      # =====================================================
 
       - run:
           name: dbt Parse
@@ -92,6 +160,10 @@ jobs:
             echo "========================================"
 
             dbt parse --no-partial-parse
+
+      # =====================================================
+      # 9. CHECK MODELS
+      # =====================================================
 
       - run:
           name: Check dbt Models
@@ -104,6 +176,10 @@ jobs:
               --resource-type model \
               --output name
 
+      # =====================================================
+      # 10. SQLFLUFF
+      # =====================================================
+
       - run:
           name: SQL Linting
           command: |
@@ -113,9 +189,17 @@ jobs:
 
             sqlfluff lint models/
 
+      # =====================================================
+      # 11. AWS OIDC
+      # =====================================================
+
       - aws-cli/setup:
           role_arn: "arn:aws:iam::008300323897:role/circle-ci-oidc-role"
           region: "ap-south-1"
+
+      # =====================================================
+      # 12. VERIFY AWS
+      # =====================================================
 
       - run:
           name: Verify AWS Identity
@@ -126,9 +210,15 @@ jobs:
 
             aws sts get-caller-identity
 
-      # -------------------------------------------------------
-      # Download the baseline manifest generated by MAIN.
-      # -------------------------------------------------------
+      # =====================================================
+      # 13. DOWNLOAD MAIN MANIFEST
+      #
+      # Used by Slim CI.
+      #
+      # NOTE:
+      # This is NOT model synchronization.
+      # It is only dbt state used for comparison.
+      # =====================================================
 
       - run:
           name: Download Main dbt State
@@ -138,6 +228,7 @@ jobs:
             echo "========================================"
 
             rm -rf .state
+
             mkdir -p .state/main
 
             aws s3 cp \
@@ -145,20 +236,22 @@ jobs:
               .state/main/manifest.json
 
             if [ ! -s .state/main/manifest.json ]; then
-              echo "ERROR: downloaded main manifest is missing or empty."
+              echo "ERROR: Main manifest is missing or empty."
+
               exit 1
             fi
 
             echo ""
+
             echo "========================================"
             echo "Main Manifest"
             echo "========================================"
 
             ls -lh .state/main/manifest.json
 
-      # -------------------------------------------------------
-      # Validate BOTH manifests before state comparison.
-      # -------------------------------------------------------
+      # =====================================================
+      # 14. VALIDATE MANIFESTS
+      # =====================================================
 
       - run:
           name: Validate dbt Manifests
@@ -169,54 +262,21 @@ jobs:
 
             test -s target/manifest.json
 
-            python - <<'PY'
-            import json
-
-            with open("target/manifest.json", "r", encoding="utf-8") as f:
-                manifest = json.load(f)
-
-            models = [
-                node_id
-                for node_id, node in manifest.get("nodes", {}).items()
-                if node_id.startswith("model.")
-            ]
-
-            print("Feature manifest: VALID")
-            print("Feature model count:", len(models))
-
-            for model in models:
-                print("  ", model)
-            PY
+            python -c "import json; m=json.load(open('target/manifest.json')); print('Feature manifest: VALID JSON'); print('Feature nodes:', len(m.get('nodes', {})))"
 
             echo ""
+
             echo "========================================"
             echo "Validating Main Manifest"
             echo "========================================"
 
             test -s .state/main/manifest.json
 
-            python - <<'PY'
-            import json
+            python -c "import json; m=json.load(open('.state/main/manifest.json')); print('Main manifest: VALID JSON'); print('Main nodes:', len(m.get('nodes', {})))"
 
-            with open(".state/main/manifest.json", "r", encoding="utf-8") as f:
-                manifest = json.load(f)
-
-            models = [
-                node_id
-                for node_id, node in manifest.get("nodes", {}).items()
-                if node_id.startswith("model.")
-            ]
-
-            print("Main manifest: VALID")
-            print("Main model count:", len(models))
-
-            for model in models:
-                print("  ", model)
-            PY
-
-      # -------------------------------------------------------
-      # Slim CI: changed models only.
-      # -------------------------------------------------------
+      # =====================================================
+      # 15. FIND CHANGED MODELS
+      # =====================================================
 
       - run:
           name: Find Changed Models
@@ -231,9 +291,9 @@ jobs:
               --resource-type model \
               --output name
 
-      # -------------------------------------------------------
-      # Slim CI: changed models + downstream dependencies.
-      # -------------------------------------------------------
+      # =====================================================
+      # 16. FIND CHANGED + DOWNSTREAM MODELS
+      # =====================================================
 
       - run:
           name: Find Changed and Affected Models
@@ -248,10 +308,15 @@ jobs:
               --resource-type model \
               --output name
 
-      # -------------------------------------------------------
-      # ACTUAL Slim CI execution.
-      # CI target = dev_ci -> awsdatacatalog.practice
-      # -------------------------------------------------------
+      # =====================================================
+      # 17. ACTUAL SLIM CI BUILD
+      #
+      # Target:
+      #   dev_ci
+      #
+      # Database:
+      #   practice
+      # =====================================================
 
       - run:
           name: Slim CI dbt Build
@@ -261,10 +326,13 @@ jobs:
             echo "========================================"
 
             echo "Target: dev_ci"
+
             echo "Catalog: awsdatacatalog"
+
             echo "Database: practice"
 
             echo ""
+
             echo "Running changed + downstream models..."
 
             dbt build \
@@ -274,16 +342,26 @@ jobs:
               --no-partial-parse
 
             echo ""
+
             echo "========================================"
             echo "Slim CI Completed Successfully"
             echo "========================================"
 
 
+
   # =========================================================
-  # MAIN BRANCH - GENERATE AND STORE DBT STATE
+  # MAIN - GENERATE DBT STATE
+  #
+  # main → dbt parse
+  #      → manifest.json
+  #      → S3
+  #
+  # This S3 object is ONLY used as the Slim CI baseline.
+  # It is NOT application/model deployment.
   # =========================================================
 
   generate-dbt-state:
+
     docker:
       - image: cimg/python:3.11
 
@@ -292,7 +370,15 @@ jobs:
 
     steps:
 
+      # =====================================================
+      # 1. CHECKOUT
+      # =====================================================
+
       - checkout
+
+      # =====================================================
+      # 2. VERIFY MAIN
+      # =====================================================
 
       - run:
           name: Verify Main Branch
@@ -300,13 +386,20 @@ jobs:
             echo "========================================"
             echo "Current Branch"
             echo "========================================"
+
             git branch --show-current
 
             echo ""
+
             echo "========================================"
             echo "Current Commit"
             echo "========================================"
+
             git log -1 --oneline
+
+      # =====================================================
+      # 3. INSTALL DBT
+      # =====================================================
 
       - run:
           name: Install dbt Dependencies
@@ -314,21 +407,30 @@ jobs:
             python --version
 
             pip install --upgrade pip
+
             pip install -r requirements.txt
+
+      # =====================================================
+      # 4. VERIFY DBT
+      # =====================================================
 
       - run:
           name: Verify dbt
           command: |
             dbt --version
 
+      # =====================================================
+      # 5. DBT DEPS
+      # =====================================================
+
       - run:
           name: dbt Dependencies
           command: |
             dbt deps
 
-      # -------------------------------------------------------
-      # Generate target/manifest.json from the exact MAIN code.
-      # -------------------------------------------------------
+      # =====================================================
+      # 6. GENERATE MAIN MANIFEST
+      # =====================================================
 
       - run:
           name: Generate Main dbt Manifest
@@ -339,9 +441,9 @@ jobs:
 
             dbt parse --no-partial-parse
 
-      # -------------------------------------------------------
-      # Do not upload an empty/invalid manifest.
-      # -------------------------------------------------------
+      # =====================================================
+      # 7. VALIDATE MAIN MANIFEST
+      # =====================================================
 
       - run:
           name: Validate Main Manifest
@@ -352,131 +454,31 @@ jobs:
 
             if [ ! -f target/manifest.json ]; then
               echo "ERROR: target/manifest.json does not exist."
+
               exit 1
             fi
 
             if [ ! -s target/manifest.json ]; then
               echo "ERROR: target/manifest.json is empty."
+
               exit 1
             fi
 
             ls -lh target/manifest.json
 
-            python - <<'PY'
-            import json
+            python -c "import json; m=json.load(open('target/manifest.json')); print('Main manifest: VALID JSON'); print('Main nodes:', len(m.get('nodes', {})))"
 
-            with open("target/manifest.json", "r", encoding="utf-8") as f:
-                manifest = json.load(f)
-
-            models = [
-                node_id
-                for node_id, node in manifest.get("nodes", {}).items()
-                if node_id.startswith("model.")
-            ]
-
-            print("Main manifest: VALID JSON")
-            print("Main model count:", len(models))
-
-            for model in models:
-                print("  ", model)
-            PY
+      # =====================================================
+      # 8. AWS OIDC
+      # =====================================================
 
       - aws-cli/setup:
           role_arn: "arn:aws:iam::008300323897:role/circle-ci-oidc-role"
           region: "ap-south-1"
 
-      - run:
-          name: Verify AWS Identity
-          command: |
-            aws sts get-caller-identity
-
-      # -------------------------------------------------------
-      # Upload the valid MAIN baseline.
-      # -------------------------------------------------------
-
-      - run:
-          name: Upload Main Manifest to S3
-          command: |
-            echo "========================================"
-            echo "Uploading Main Manifest"
-            echo "========================================"
-
-            aws s3 cp \
-              target/manifest.json \
-              s3://dummu-circleci-s3-bucket/dbt-state/main/manifest.json
-
-      # -------------------------------------------------------
-      # Download it back and validate the actual S3 object.
-      # This prevents another empty/invalid state file.
-      # -------------------------------------------------------
-
-      - run:
-          name: Verify Main Manifest in S3
-          command: |
-            echo "========================================"
-            echo "Verifying S3 Manifest"
-            echo "========================================"
-
-            aws s3api head-object \
-              --bucket dummu-circleci-s3-bucket \
-              --key dbt-state/main/manifest.json
-
-            rm -f /tmp/main-manifest.json
-
-            aws s3 cp \
-              s3://dummu-circleci-s3-bucket/dbt-state/main/manifest.json \
-              /tmp/main-manifest.json
-
-            if [ ! -s /tmp/main-manifest.json ]; then
-              echo "ERROR: S3 manifest is empty."
-              exit 1
-            fi
-
-            python - <<'PY'
-            import json
-
-            with open("/tmp/main-manifest.json", "r", encoding="utf-8") as f:
-                manifest = json.load(f)
-
-            models = [
-                node_id
-                for node_id, node in manifest.get("nodes", {}).items()
-                if node_id.startswith("model.")
-            ]
-
-            print("S3 manifest: VALID JSON")
-            print("S3 model count:", len(models))
-
-            for model in models:
-                print("  ", model)
-            PY
-
-            echo ""
-            echo "========================================"
-            echo "Main Manifest Successfully Stored"
-            echo "========================================"
-
-            aws s3 ls \
-              s3://dummu-circleci-s3-bucket/dbt-state/main/
-
-
-  # =========================================================
-  # MAIN BRANCH DEPLOYMENT
-  # CURRENT: main -> S3 models
-  # FUTURE:  main -> Docker -> ECR -> ECS/Fargate
-  # =========================================================
-
-  model-deploy:
-    docker:
-      - image: cimg/aws:2025.01
-
-    steps:
-
-      - checkout
-
-      - aws-cli/setup:
-          role_arn: "arn:aws:iam::008300323897:role/circle-ci-oidc-role"
-          region: "ap-south-1"
+      # =====================================================
+      # 9. VERIFY AWS
+      # =====================================================
 
       - run:
           name: Verify AWS Identity
@@ -487,36 +489,222 @@ jobs:
 
             aws sts get-caller-identity
 
-      - run:
-          name: Show Models
-          command: |
-            echo "========================================"
-            echo "Models in GitHub"
-            echo "========================================"
-
-            find models -type f -print
+      # =====================================================
+      # 10. UPLOAD MAIN MANIFEST
+      #
+      # ONLY FOR SLIM CI STATE
+      # =====================================================
 
       - run:
-          name: Sync Models to S3
+          name: Upload Main Manifest to S3
           command: |
             echo "========================================"
-            echo "Synchronizing Models with S3"
+            echo "Uploading Main dbt State"
             echo "========================================"
 
-            aws s3 sync \
-              models/ \
-              s3://dummu-circleci-s3-bucket/models/ \
-              --delete
+            aws s3 cp \
+              target/manifest.json \
+              s3://dummu-circleci-s3-bucket/dbt-state/main/manifest.json
+
+      # =====================================================
+      # 11. VERIFY S3 MANIFEST
+      # =====================================================
 
       - run:
-          name: Verify S3 Models
+          name: Verify Main Manifest in S3
           command: |
             echo "========================================"
-            echo "Models Currently in S3"
+            echo "Verifying Main dbt State"
             echo "========================================"
 
-            aws s3 ls \
-              s3://dummu-circleci-s3-bucket/models/
+            aws s3api head-object \
+              --bucket dummu-circleci-s3-bucket \
+              --key dbt-state/main/manifest.json
+
+            aws s3 cp \
+              s3://dummu-circleci-s3-bucket/dbt-state/main/manifest.json \
+              /tmp/main-manifest.json
+
+            if [ ! -s /tmp/main-manifest.json ]; then
+              echo "ERROR: S3 manifest is empty."
+
+              exit 1
+            fi
+
+            python -c "import json; m=json.load(open('/tmp/main-manifest.json')); print('S3 manifest: VALID JSON'); print('S3 nodes:', len(m.get('nodes', {})))"
+
+
+
+  # =========================================================
+  # DOCKER BUILD → ECR
+  #
+  # Runs ONLY after code reaches main.
+  #
+  # main
+  #   ↓
+  # Docker build
+  #   ↓
+  # ECR
+  # =========================================================
+
+  docker-build-push:
+
+    machine:
+      image: ubuntu-2404:current
+
+    steps:
+
+      # =====================================================
+      # 1. CHECKOUT
+      # =====================================================
+
+      - checkout
+
+      # =====================================================
+      # 2. VERIFY SOURCE
+      # =====================================================
+
+      - run:
+          name: Verify Source
+          command: |
+            echo "========================================"
+            echo "Current Branch"
+            echo "========================================"
+
+            git branch --show-current
+
+            echo ""
+
+            echo "========================================"
+            echo "Current Commit"
+            echo "========================================"
+
+            git log -1 --oneline
+
+      # =====================================================
+      # 3. VERIFY DOCKER
+      # =====================================================
+
+      - run:
+          name: Verify Docker
+          command: |
+            echo "========================================"
+            echo "Docker Version"
+            echo "========================================"
+
+            docker --version
+
+      # =====================================================
+      # 4. AWS OIDC
+      # =====================================================
+
+      - aws-cli/setup:
+          role_arn: "arn:aws:iam::008300323897:role/circle-ci-oidc-role"
+          region: "ap-south-1"
+
+      # =====================================================
+      # 5. VERIFY AWS
+      # =====================================================
+
+      - run:
+          name: Verify AWS Identity
+          command: |
+            echo "========================================"
+            echo "AWS Identity"
+            echo "========================================"
+
+            aws sts get-caller-identity
+
+      # =====================================================
+      # 6. LOGIN TO ECR
+      # =====================================================
+
+      - run:
+          name: Login to Amazon ECR
+          command: |
+            echo "========================================"
+            echo "Logging into Amazon ECR"
+            echo "========================================"
+
+            aws ecr get-login-password \
+              --region ap-south-1 | \
+              docker login \
+              --username AWS \
+              --password-stdin \
+              008300323897.dkr.ecr.ap-south-1.amazonaws.com
+
+      # =====================================================
+      # 7. BUILD DOCKER IMAGE
+      # =====================================================
+
+      - run:
+          name: Build Docker Image
+          command: |
+            echo "========================================"
+            echo "Building Docker Image"
+            echo "========================================"
+
+            docker build \
+              -t dbt-athena-demo:latest \
+              .
+
+      # =====================================================
+      # 8. VERIFY DOCKER IMAGE
+      # =====================================================
+
+      - run:
+          name: Verify Docker Image
+          command: |
+            echo "========================================"
+            echo "Docker Images"
+            echo "========================================"
+
+            docker images
+
+      # =====================================================
+      # 9. TAG IMAGE
+      # =====================================================
+
+      - run:
+          name: Tag Docker Image
+          command: |
+            echo "========================================"
+            echo "Tagging Docker Image"
+            echo "========================================"
+
+            docker tag \
+              dbt-athena-demo:latest \
+              008300323897.dkr.ecr.ap-south-1.amazonaws.com/dbt-athena-demo:latest
+
+      # =====================================================
+      # 10. PUSH TO ECR
+      # =====================================================
+
+      - run:
+          name: Push Docker Image to ECR
+          command: |
+            echo "========================================"
+            echo "Pushing Docker Image to ECR"
+            echo "========================================"
+
+            docker push \
+              008300323897.dkr.ecr.ap-south-1.amazonaws.com/dbt-athena-demo:latest
+
+      # =====================================================
+      # 11. VERIFY ECR
+      # =====================================================
+
+      - run:
+          name: Verify ECR Image
+          command: |
+            echo "========================================"
+            echo "Images in ECR"
+            echo "========================================"
+
+            aws ecr describe-images \
+              --repository-name dbt-athena-demo \
+              --region ap-south-1
+
 
 
 # ===========================================================
@@ -530,33 +718,54 @@ workflows:
   # =========================================================
 
   feature-validation:
+
     jobs:
 
       - validate-models:
+
           filters:
             branches:
               ignore:
                 - main
 
 
+
   # =========================================================
   # MAIN DEPLOYMENT
+  #
+  # main
+  #   ↓
+  # generate Slim CI state
+  #   ↓
+  # Docker build
+  #   ↓
+  # ECR
   # =========================================================
 
   deploy:
+
     jobs:
 
-      # Generate and store the MAIN dbt baseline first.
+      # -----------------------------------------------------
+      # Generate main manifest for future Slim CI.
+      # -----------------------------------------------------
+
       - generate-dbt-state:
+
           filters:
             branches:
               only:
                 - main
 
-      # Deploy models only after the baseline succeeds.
-      - model-deploy:
+      # -----------------------------------------------------
+      # Build Docker image and push to ECR.
+      # -----------------------------------------------------
+
+      - docker-build-push:
+
           requires:
             - generate-dbt-state
+
           filters:
             branches:
               only:
