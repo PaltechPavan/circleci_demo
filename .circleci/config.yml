@@ -245,51 +245,58 @@ jobs:
 
             aws sts get-caller-identity
 
-      # =====================================================
-      # 14. VERIFY CI DATABASE
+           # =====================================================
+      # 14. CHECK WHICH MODELS ARE ENABLED
       # =====================================================
 
       - run:
-          name: Verify CI Athena Database
+          name: Check Enabled dbt Models
           command: |
             echo "========================================"
-            echo "Checking CI Athena Database"
+            echo "dbt Models"
             echo "========================================"
 
-            aws athena start-query-execution \
-              --query-string "SHOW DATABASES" \
-              --work-group primary \
-              --query-execution-context Database=awsdatacatalog \
-              --result-configuration OutputLocation=s3://umed-practice-12345-raw/practice-ci/ \
-              > /tmp/query.json
+            dbt ls \
+              --resource-type model \
+              --output name
 
-            cat /tmp/query.json
+            echo ""
+            echo "========================================"
+            echo "dbt Model Details"
+            echo "========================================"
+
+            dbt ls \
+              --resource-type model \
+              --output json
+
 
       # =====================================================
-      # 15. CI DBT BUILD
-      #
-      # IMPORTANT:
-      # This currently builds the models selected by dbt.
-      #
-      # Target = dev_ci
-      # Database = umed_ci_ehr_db
+      # 15. TEST EACH MODEL EXPLICITLY
       # =====================================================
 
       - run:
           name: CI dbt Build
           command: |
             echo "========================================"
-            echo "Running dbt Build"
+            echo "Running CI dbt Build"
             echo "========================================"
 
             echo "Target: dev_ci"
             echo "Database: umed_ci_ehr_db"
 
             echo ""
+            echo "Building appointments..."
 
             dbt build \
               --target dev_ci \
-              --select "resource_type:model"
+              --select appointments
+
+            echo ""
+            echo "Building patient..."
+
+            dbt build \
+              --target dev_ci \
+              --select patient
 
 
   # =========================================================
