@@ -301,33 +301,69 @@ jobs:
             dbt ls \
               --resource-type model \
               --output name
-      # =====================================================
-      # 15. TEST EACH MODEL EXPLICITLY
+           # =====================================================
+      # VERIFY EXACT MODEL SELECTION
       # =====================================================
 
       - run:
-          name: CI dbt Build
+          name: Verify Model Selection
           command: |
             echo "========================================"
-            echo "Running CI dbt Build"
+            echo "Appointments Selection"
+            echo "========================================"
+
+            dbt ls \
+              --target dev_ci \
+              --select "model.dbt_demo.appointments"
+
+            echo ""
+            echo "========================================"
+            echo "Patient Selection"
+            echo "========================================"
+
+            dbt ls \
+              --target dev_ci \
+              --select "model.dbt_demo.patient"
+
+
+      # =====================================================
+      # TEST APPOINTMENTS MODEL
+      # =====================================================
+
+      - run:
+          name: Test Appointments Model
+          command: |
+            echo "========================================"
+            echo "Testing Appointments Model"
             echo "========================================"
 
             echo "Target: dev_ci"
             echo "Database: umed_ci_ehr_db"
 
-            echo ""
-            echo "Building appointments..."
-
-            dbt build \
+            dbt run \
               --target dev_ci \
-              --select appointments
+              --select "model.dbt_demo.appointments" \
+              --debug
 
-            echo ""
-            echo "Building patient..."
 
-            dbt build \
+      # =====================================================
+      # TEST PATIENT MODEL
+      # =====================================================
+
+      - run:
+          name: Test Patient Model
+          command: |
+            echo "========================================"
+            echo "Testing Patient Model"
+            echo "========================================"
+
+            echo "Target: dev_ci"
+            echo "Database: umed_ci_ehr_db"
+
+            dbt run \
               --target dev_ci \
-              --select patient
+              --select "model.dbt_demo.patient" \
+              --debug
 
 
   # =========================================================
