@@ -7,9 +7,21 @@ jobs:
 
   # =========================================================
   # FEATURE / PULL REQUEST VALIDATION
+  #
+  # feature → PR → CircleCI
+  #
+  # This job:
+  #   1. Lints SQL
+  #   2. Parses dbt
+  #   3. Downloads main manifest
+  #   4. Generates feature manifest
+  #   5. Finds changed models
+  #   6. Finds changed + downstream models
+  #   7. Runs Slim CI against practice database
   # =========================================================
 
   validate-models:
+
     docker:
       - image: cimg/python:3.11
 
@@ -38,11 +50,20 @@ jobs:
             git branch --show-current
 
             echo ""
+
             echo "========================================"
             echo "Current Commit"
             echo "========================================"
 
             git log -1 --oneline
+
+            echo ""
+
+            echo "========================================"
+            echo "Git Status"
+            echo "========================================"
+
+            git status
 
       # =====================================================
       # 3. SHOW PROJECT FILES
@@ -58,17 +79,31 @@ jobs:
             find . -maxdepth 3 -type f | sort
 
       # =====================================================
-      # 4. INSTALL DEPENDENCIES
+      # 4. INSTALL PYTHON / DBT / SQLFLUFF
       # =====================================================
 
       - run:
           name: Install Dependencies
           command: |
             echo "========================================"
-            echo "Installing Dependencies"
+            echo "Python Version"
             echo "========================================"
 
             python --version
+
+            echo ""
+
+            echo "========================================"
+            echo "Pip Version"
+            echo "========================================"
+
+            pip --version
+
+            echo ""
+
+            echo "========================================"
+            echo "Installing Dependencies"
+            echo "========================================"
 
             pip install --upgrade pip
 
@@ -114,6 +149,7 @@ jobs:
             cat dbt_project.yml
 
             echo ""
+
             echo "========================================"
             echo "dbt Profile"
             echo "========================================"
@@ -122,6 +158,12 @@ jobs:
 
       # =====================================================
       # 8. DBT PARSE
+      #
+      # Generates:
+      #
+      # target/manifest.json
+      #
+      # This is the FEATURE manifest.
       # =====================================================
 
       - run:
@@ -131,7 +173,8 @@ jobs:
             echo "Running dbt parse"
             echo "========================================"
 
-            dbt parse
+            dbt parse \
+              --no-partial-parse
 
       # =====================================================
       # 9. CHECK DBT MODELS
@@ -149,7 +192,9 @@ jobs:
               --output name
 
       # =====================================================
-      # 10. SQL LINTING
+      # 10. SQLFLUFF
+      #
+      # First validation before Slim CI.
       # =====================================================
 
       - run:
@@ -170,7 +215,7 @@ jobs:
           region: "ap-south-1"
 
       # =====================================================
-      # 12. VERIFY AWS
+      # 12. VERIFY AWS IDENTITY
       # =====================================================
 
       - run:
@@ -183,48 +228,167 @@ jobs:
             aws sts get-caller-identity
 
       # =====================================================
-      # 13. ACTUAL CI DBT RUN
+      # 13. DOWNLOAD MAIN MANIFEST
+      #
+      # MAIN MANIFEST:
+      #
+      # s3://dummu-circleci-s3-bucket/
+      #   dbt-state/
+      #     main/
+      #       manifest.json
+      #
+      # This is the baseline for Slim CI.
       # =====================================================
 
       - run:
-          name: CI dbt Run
+          name: Download Main dbt State
           command: |
             echo "========================================"
-            echo "CI dbt Run"
+            echo "Downloading Main dbt Manifest"
+            echo "========================================"
+
+            mkdir -p .state/main
+
+            aws s3 cp \
+              s3://dummu-circleci-s3-bucket/dbt-state/main/manifest.json \
+              .state/main/manifest.json
+
+            echo ""
+
+            echo "========================================"
+            echo "Downloaded Main Manifest"
+            echo "========================================"
+
+            ls -lh .state/main/manifest.json
+
+      # =====================================================
+      # 14. VERIFY FEATURE MANIFEST
+      # =====================================================
+
+      - run:
+          name: Verify Feature Manifest
+          command: |
+            echo "========================================"
+            echo "Feature Manifest"
+            echo "========================================"
+
+            if [ -f target/manifest.json ]; then
+
+              echo "SUCCESS: Feature manifest exists."
+
+              ls -lh target/manifest.json
+
+            else
+
+              echo "ERROR: Feature manifest does not exist."
+
+              exit 1
+
+            fi
+
+      # =====================================================
+      # 15. FIND CHANGED MODELS
+      #
+      # state:modified
+      #
+      # Finds models that changed compared with main.
+      # =====================================================
+
+      - run:
+          name: Find Changed Models
+          command: |
+            echo "========================================"
+            echo "Slim CI - Changed Models"
+            echo "========================================"
+
+            dbt ls \
+              --select state:modified \
+              --state .state/main \
+              --resource-type model \
+              --output name
+
+      # =====================================================
+      # 16. FIND CHANGED + DOWNSTREAM MODELS
+      #
+      # state:modified+
+      #
+      # Finds:
+      #
+      # changed models
+      # +
+      # downstream dependent models
+      # =====================================================
+
+      - run:
+          name: Find Changed and Affected Models
+          command: |
+            echo "========================================"
+            echo "Slim CI - Changed + Downstream Models"
+            echo "========================================"
+
+            dbt ls \
+              --select state:modified+ \
+              --state .state/main \
+              --resource-type model \
+              --output name
+
+      # =====================================================
+      # 17. SLIM CI DBT BUILD
+      #
+      # THIS IS THE ACTUAL CI EXECUTION.
+      #
+      # Only changed + affected models are built.
+      #
+      # Target:
+      #   dev_ci
+      #
+      # Database:
+      #   practice
+      # =====================================================
+
+      - run:
+          name: Slim CI dbt Build
+          command: |
+            echo "========================================"
+            echo "Slim CI dbt Build"
             echo "========================================"
 
             echo "Target: dev_ci"
-            echo "Database: umed_ci_ehr_db"
+
+            echo "Catalog: awsdatacatalog"
+
+            echo "Database: practice"
 
             echo ""
-            echo "Running Appointments Model"
 
-            dbt run \
+            echo "Running changed + downstream models..."
+
+            dbt build \
               --target dev_ci \
-              --select appointments \
+              --select state:modified+ \
+              --state .state/main \
               --no-partial-parse
 
             echo ""
-            echo "Running Patient Model"
 
-            dbt run \
-              --target dev_ci \
-              --select patient \
-              --no-partial-parse
+            echo "========================================"
+            echo "Slim CI Completed Successfully"
+            echo "========================================"
 
-            echo ""
-            echo "========================================"
-            echo "CI dbt Run Completed"
-            echo "========================================"
 
 
   # =========================================================
   # MAIN BRANCH
   #
-  # GENERATE DBT STATE / MANIFEST
+  # GENERATE MAIN DBT STATE
+  #
+  # main → dbt parse
+  #      → manifest.json
+  #      → S3
   # =========================================================
 
   generate-dbt-state:
+
     docker:
       - image: cimg/python:3.11
 
@@ -240,7 +404,7 @@ jobs:
       - checkout
 
       # =====================================================
-      # 2. VERIFY MAIN BRANCH
+      # 2. VERIFY MAIN
       # =====================================================
 
       - run:
@@ -253,6 +417,7 @@ jobs:
             git branch --show-current
 
             echo ""
+
             echo "========================================"
             echo "Current Commit"
             echo "========================================"
@@ -303,7 +468,11 @@ jobs:
             dbt deps
 
       # =====================================================
-      # 6. GENERATE MANIFEST
+      # 6. GENERATE MAIN MANIFEST
+      #
+      # dbt creates:
+      #
+      # target/manifest.json
       # =====================================================
 
       - run:
@@ -330,17 +499,23 @@ jobs:
             ls -lah target/
 
             echo ""
+
             echo "========================================"
             echo "Checking manifest.json"
             echo "========================================"
 
             if [ -f target/manifest.json ]; then
-              echo "SUCCESS: manifest.json exists"
+
+              echo "SUCCESS: manifest.json was created."
 
               ls -lh target/manifest.json
+
             else
-              echo "ERROR: manifest.json was not created"
+
+              echo "ERROR: manifest.json was not created."
+
               exit 1
+
             fi
 
       # =====================================================
@@ -365,7 +540,14 @@ jobs:
             aws sts get-caller-identity
 
       # =====================================================
-      # 10. UPLOAD MANIFEST TO S3
+      # 10. UPLOAD MAIN MANIFEST
+      #
+      # Destination:
+      #
+      # s3://dummu-circleci-s3-bucket/
+      #   dbt-state/
+      #     main/
+      #       manifest.json
       # =====================================================
 
       - run:
@@ -384,19 +566,21 @@ jobs:
       # =====================================================
 
       - run:
-          name: Verify Manifest in S3
+          name: Verify Main Manifest in S3
           command: |
             echo "========================================"
-            echo "S3 Main dbt State"
+            echo "Main dbt State in S3"
             echo "========================================"
 
             aws s3 ls \
               s3://dummu-circleci-s3-bucket/dbt-state/main/
 
             echo ""
+
             echo "========================================"
             echo "Main Manifest Successfully Stored"
             echo "========================================"
+
 
 
   # =========================================================
@@ -412,6 +596,7 @@ jobs:
   # =========================================================
 
   model-deploy:
+
     docker:
       - image: cimg/aws:2025.01
 
@@ -488,6 +673,7 @@ jobs:
               s3://dummu-circleci-s3-bucket/models/
 
 
+
 # ===========================================================
 # WORKFLOWS
 # ===========================================================
@@ -496,42 +682,58 @@ workflows:
 
   # =========================================================
   # FEATURE / PR VALIDATION
+  #
+  # Runs on feature branches.
+  #
+  # Does NOT run on main.
   # =========================================================
 
   feature-validation:
+
     jobs:
 
       - validate-models:
+
           filters:
             branches:
               ignore:
                 - main
 
 
+
   # =========================================================
   # MAIN DEPLOYMENT
+  #
+  # Runs only on main.
   # =========================================================
 
   deploy:
+
     jobs:
 
-      # -----------------------------------------------------
+      # =====================================================
       # FIRST:
-      # Generate main manifest and upload to S3
-      # -----------------------------------------------------
+      #
+      # Generate main manifest
+      # =====================================================
 
       - generate-dbt-state:
+
           filters:
             branches:
               only:
                 - main
 
-      # -----------------------------------------------------
+      # =====================================================
       # SECOND:
-      # Existing deployment
-      # -----------------------------------------------------
+      #
+      # Deploy models to S3
+      #
+      # Waits until manifest generation succeeds.
+      # =====================================================
 
       - model-deploy:
+
           requires:
             - generate-dbt-state
 
