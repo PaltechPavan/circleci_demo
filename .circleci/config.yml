@@ -65,7 +65,7 @@ jobs:
             find . -maxdepth 3 -type f | sort
 
       # =====================================================
-      # 4. INSTALL PYTHON / DBT / SQLFLUFF
+      # 4. INSTALL DBT + SQLFLUFF
       # =====================================================
 
       - run:
@@ -134,9 +134,6 @@ jobs:
 
       # =====================================================
       # 8. SHOW EXACT MODEL CONTENT
-      #
-      # This is temporary debugging.
-      # It proves CircleCI is using the latest code.
       # =====================================================
 
       - run:
@@ -185,9 +182,6 @@ jobs:
 
       # =====================================================
       # 10. AWS OIDC
-      #
-      # We keep this because Slim CI will need AWS access.
-      # At the moment it is only verifying the identity.
       # =====================================================
 
       - aws-cli/setup:
@@ -208,35 +202,29 @@ jobs:
             aws sts get-caller-identity
 
       # =====================================================
-      # 12. SLIM CI
+      # 12. TEST DBT IN CI DATABASE
       #
-      # TEMPORARY PLACEHOLDER
-      #
-      # We will replace this after creating:
+      # IMPORTANT:
+      # This runs against dev_ci from profiles.yml
+      # and therefore uses:
       #
       # umed_ci_ehr_db
       #
-      # and configuring the main manifest/state.
+      # It does NOT use production.
       # =====================================================
 
       - run:
-          name: Slim CI
+          name: CI dbt Build
           command: |
             echo "========================================"
-            echo "Slim CI"
+            echo "Running dbt Build"
             echo "========================================"
 
-            echo "Slim CI will be configured in the next phase."
+            echo "Target: dev_ci"
 
-            echo ""
-            echo "Development database:"
-            echo "umed_ci_ehr_db"
+            echo "Database: umed_ci_ehr_db"
 
-            echo ""
-            echo "No production dbt run is executed here."
-
-            echo ""
-            echo "PR validation stage completed."
+            dbt build --target dev_ci
 
 
   # =========================================================
