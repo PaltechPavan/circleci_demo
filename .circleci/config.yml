@@ -11,10 +11,10 @@ jobs:
   # feature → PR → CircleCI
   #
   # Runs:
-  #   - dbt dependencies
-  #   - dbt parse
-  #   - SQLFluff
-  #   - Slim CI
+  #   1. dbt dependencies
+  #   2. dbt parse
+  #   3. SQLFluff
+  #   4. Slim CI
   #
   # CI database:
   #   awsdatacatalog.practice
@@ -213,11 +213,9 @@ jobs:
       # =====================================================
       # 13. DOWNLOAD MAIN MANIFEST
       #
-      # Used by Slim CI.
+      # This is ONLY Slim CI state.
       #
-      # NOTE:
-      # This is NOT model synchronization.
-      # It is only dbt state used for comparison.
+      # It is NOT model synchronization.
       # =====================================================
 
       - run:
@@ -295,10 +293,6 @@ jobs:
       # 16. FIND CHANGED + DOWNSTREAM MODELS
       # =====================================================
 
-      # =====================================================
-      # 5. SYNC MODELS TO S3
-      # =====================================================
-
       - run:
           name: Find Changed and Affected Models
           command: |
@@ -313,17 +307,13 @@ jobs:
               --output name
 
       # =====================================================
-      # 17. ACTUAL SLIM CI BUILD
+      # 17. SLIM CI BUILD
       #
       # Target:
       #   dev_ci
       #
       # Database:
       #   practice
-      # =====================================================
-
-      # =====================================================
-      # 6. VERIFY S3
       # =====================================================
 
       - run:
@@ -334,9 +324,7 @@ jobs:
             echo "========================================"
 
             echo "Target: dev_ci"
-
             echo "Catalog: awsdatacatalog"
-
             echo "Database: practice"
 
             echo ""
@@ -364,8 +352,10 @@ jobs:
   #      → manifest.json
   #      → S3
   #
+  # IMPORTANT:
   # This S3 object is ONLY used as the Slim CI baseline.
-  # It is NOT application/model deployment.
+  #
+  # There is NO model synchronization to S3.
   # =========================================================
 
   generate-dbt-state:
@@ -500,7 +490,9 @@ jobs:
       # =====================================================
       # 10. UPLOAD MAIN MANIFEST
       #
-      # ONLY FOR SLIM CI STATE
+      # ONLY FOR SLIM CI STATE.
+      #
+      # NO MODEL FILES ARE SYNCHRONIZED TO S3.
       # =====================================================
 
       - run:
@@ -515,7 +507,7 @@ jobs:
               s3://dummu-circleci-s3-bucket/dbt-state/main/manifest.json
 
       # =====================================================
-      # 11. VERIFY S3 MANIFEST
+      # 11. VERIFY MAIN MANIFEST IN S3
       # =====================================================
 
       - run:
@@ -719,12 +711,6 @@ jobs:
 # WORKFLOWS
 # ===========================================================
 
-
-
-# ===========================================================
-# WORKFLOWS
-# ===========================================================
-
 workflows:
 
   # =========================================================
@@ -783,4 +769,4 @@ workflows:
           filters:
             branches:
               only:
-                - mainGet-Item main-manifest.json | Select-Object Name,Length
+                - main
