@@ -213,9 +213,9 @@ jobs:
       # =====================================================
       # 13. DOWNLOAD MAIN MANIFEST
       #
-      # This is ONLY Slim CI state.
+      # ONLY FOR SLIM CI STATE
       #
-      # It is NOT model synchronization.
+      # This is NOT model synchronization.
       # =====================================================
 
       - run:
@@ -235,7 +235,6 @@ jobs:
 
             if [ ! -s .state/main/manifest.json ]; then
               echo "ERROR: Main manifest is missing or empty."
-
               exit 1
             fi
 
@@ -348,14 +347,16 @@ jobs:
   # =========================================================
   # MAIN - GENERATE DBT STATE
   #
-  # main → dbt parse
-  #      → manifest.json
-  #      → S3
+  # main
+  #   ↓
+  # dbt parse
+  #   ↓
+  # manifest.json
+  #   ↓
+  # S3
   #
-  # IMPORTANT:
-  # This S3 object is ONLY used as the Slim CI baseline.
-  #
-  # There is NO model synchronization to S3.
+  # S3 is ONLY used for Slim CI state.
+  # No model synchronization happens here.
   # =========================================================
 
   generate-dbt-state:
@@ -452,13 +453,11 @@ jobs:
 
             if [ ! -f target/manifest.json ]; then
               echo "ERROR: target/manifest.json does not exist."
-
               exit 1
             fi
 
             if [ ! -s target/manifest.json ]; then
               echo "ERROR: target/manifest.json is empty."
-
               exit 1
             fi
 
@@ -492,7 +491,7 @@ jobs:
       #
       # ONLY FOR SLIM CI STATE.
       #
-      # NO MODEL FILES ARE SYNCHRONIZED TO S3.
+      # NO MODEL FILES ARE SYNCHRONIZED.
       # =====================================================
 
       - run:
@@ -527,7 +526,6 @@ jobs:
 
             if [ ! -s /tmp/main-manifest.json ]; then
               echo "ERROR: S3 manifest is empty."
-
               exit 1
             fi
 
@@ -536,15 +534,17 @@ jobs:
 
 
   # =========================================================
-  # DOCKER BUILD → ECR
-  #
-  # Runs ONLY after code reaches main.
+  # DOCKER BUILD → ECR → EXISTING ECS FARGATE
   #
   # main
   #   ↓
   # Docker build
   #   ↓
   # ECR
+  #   ↓
+  # Existing ECS Fargate Task
+  #   ↓
+  # dbt
   # =========================================================
 
   docker-build-push:
@@ -705,6 +705,181 @@ jobs:
               --repository-name dbt-athena-demo \
               --region ap-south-1
 
+      # =====================================================
+      # 12. VERIFY ECS VARIABLES
+      #
+      # These values come from CircleCI Project
+      # Environment Variables.
+      # =====================================================
+
+      - run:
+          name: Verify ECS Configuration
+          command: |
+            echo "========================================"
+            echo "Checking ECS Configuration"
+            echo "========================================"
+
+            if [ -z "$ECS_CLUSTER" ]; then
+              echo "ERROR: ECS_CLUSTER is not configured."
+              exit 1
+            fi
+
+            if [ -z "$ECS_TASK_DEFINITION" ]; then
+              echo "ERROR: ECS_TASK_DEFINITION is not configured."
+              exit 1
+            fi
+
+            if [ -z "$ECS_SUBNET" ]; then
+              echo "ERROR: ECS_SUBNET is not configured."
+              exit 1
+            fi
+
+            if [ -z "$ECS_SECURITY_GROUP" ]; then
+              echo "ERROR: ECS_SECURITY_GROUP is not configured."
+              exit 1
+            fi
+
+            echo "ECS_CLUSTER: configured"
+            echo "ECS_TASK_DEFINITION: configured"
+            echo "ECS_SUBNET: configured"
+            echo "ECS_SECURITY_GROUP: configured"
+
+      # =====================================================
+      # 13. VERIFY ECS CLUSTER
+      # =====================================================
+
+      - run:
+          name: Verify ECS Cluster
+          command: |
+            echo "========================================"
+            echo "Verifying ECS Cluster"
+            echo "========================================"
+
+            aws ecs describe-clusters \
+              --clusters "$ECS_CLUSTER" \
+              --region ap-south-1
+
+      # =====================================================
+      # 14. VERIFY ECS TASK DEFINITION
+      # =====================================================
+
+      - run:
+          name: Verify ECS Task Definition
+          command: |
+            echo "========================================"
+            echo "Verifying ECS Task Definition"
+            echo "========================================"
+
+            aws ecs describe-task-definition \
+              --task-definition "$ECS_TASK_DEFINITION" \
+              --region ap-south-1
+
+      # =====================================================
+      # 15. RUN EXISTING ECS FARGATE TASK
+      #
+      # This reuses the ECS infrastructure that was
+      # previously configured for GitHub Actions.
+      # =====================================================
+
+      - run:
+          name: Run ECS Fargate Task
+          command: |
+            echo "========================================"
+            echo "Starting ECS Fargate Task"
+            echo "========================================"
+
+            TASK_ARN=$(aws ecs run-task \
+              --cluster "$ECS_CLUSTER" \
+              --task-definition "$ECS_TASK_DEFINITION" \
+              --launch-type FARGATE \
+              --network-configuration "awsvpcConfiguration={subnets=[$ECS_SUBNET],securityGroups=[$ECS_SECURITY_GROUP],assignPublicIp=ENABLED}" \
+              --started-by "circleci-${CIRCLE_WORKFLOW_ID}" \
+              --query "tasks[0].taskArn" \
+              --output text)
+
+            if [ -z "$TASK_ARN" ] || [ "$TASK_ARN" = "None" ]; then
+              echo "ERROR: ECS task failed to start."
+
+              aws ecs run-task \
+                --cluster "$ECS_CLUSTER" \
+                --task-definition "$ECS_TASK_DEFINITION" \
+                --launch-type FARGATE \
+                --network-configuration "awsvpcConfiguration={subnets=[$ECS_SUBNET],securityGroups=[$ECS_SECURITY_GROUP],assignPublicIp=ENABLED}" \
+                --started-by "circleci-${CIRCLE_WORKFLOW_ID}"
+
+              exit 1
+            fi
+
+            echo "ECS Task started:"
+            echo "$TASK_ARN"
+
+            echo "$TASK_ARN" > /tmp/task_arn
+
+      # =====================================================
+      # 16. WAIT FOR ECS TASK TO STOP
+      # =====================================================
+
+      - run:
+          name: Wait for ECS Task to Stop
+          command: |
+            echo "========================================"
+            echo "Waiting for dbt ECS Task"
+            echo "========================================"
+
+            TASK_ARN=$(cat /tmp/task_arn)
+
+            echo "Task ARN:"
+            echo "$TASK_ARN"
+
+            aws ecs wait tasks-stopped \
+              --cluster "$ECS_CLUSTER" \
+              --tasks "$TASK_ARN"
+
+            echo ""
+
+            echo "========================================"
+            echo "ECS Task Has Stopped"
+            echo "========================================"
+
+      # =====================================================
+      # 17. CHECK DBT TASK RESULT
+      # =====================================================
+
+      - run:
+          name: Check dbt Task Result
+          command: |
+            echo "========================================"
+            echo "Checking dbt Task Result"
+            echo "========================================"
+
+            TASK_ARN=$(cat /tmp/task_arn)
+
+            EXIT_CODE=$(aws ecs describe-tasks \
+              --cluster "$ECS_CLUSTER" \
+              --tasks "$TASK_ARN" \
+              --query "tasks[0].containers[0].exitCode" \
+              --output text)
+
+            echo "dbt container exit code: $EXIT_CODE"
+
+            if [ "$EXIT_CODE" != "0" ]; then
+
+              echo "========================================"
+              echo "ERROR: dbt task failed"
+              echo "========================================"
+
+              aws ecs describe-tasks \
+                --cluster "$ECS_CLUSTER" \
+                --tasks "$TASK_ARN"
+
+              exit 1
+
+            fi
+
+            echo "========================================"
+            echo "dbt task completed successfully"
+            echo "========================================"
+
 
 
 # ===========================================================
@@ -729,17 +904,20 @@ workflows:
                 - main
 
 
-
   # =========================================================
   # MAIN DEPLOYMENT
   #
   # main
   #   ↓
-  # generate Slim CI state
+  # generate dbt state
   #   ↓
   # Docker build
   #   ↓
   # ECR
+  #   ↓
+  # Existing ECS Fargate Task
+  #   ↓
+  # dbt
   # =========================================================
 
   deploy:
@@ -747,7 +925,7 @@ workflows:
     jobs:
 
       # -----------------------------------------------------
-      # Generate main manifest for future Slim CI.
+      # Generate main manifest for Slim CI.
       # -----------------------------------------------------
 
       - generate-dbt-state:
@@ -758,7 +936,8 @@ workflows:
                 - main
 
       # -----------------------------------------------------
-      # Build Docker image and push to ECR.
+      # Build Docker image, push to ECR,
+      # and run existing ECS Fargate task.
       # -----------------------------------------------------
 
       - docker-build-push:
