@@ -7,7 +7,7 @@ ignore: |
 
 rules:
   new-lines:
-    type: dos
+    type: unix
   new-line-at-end-of-file: disable
   document-start: disable
   truthy: enable
