@@ -392,7 +392,7 @@ jobs:
                 --cluster "$ECS_CLUSTER" \
                 --task-definition "$ECS_TASK_DEFINITION" \
                 --launch-type FARGATE \
-                --network-configuration "awsvpcConfiguration={subnets=[$ECS_SUBNET],securityGroups=[$ECS_SECURITY_GROUP],assignPublicIp=ENABLED}" \
+                --network-configuration "awsvpcConfiguration={subnets=[$ECS_SUBNET],securityGroups=[$ECS_SECURITY_GROUP],assignprivateIp=ENABLED}" \
                 --started-by "circleci-${CIRCLE_WORKFLOW_ID}"
 
               exit 1
