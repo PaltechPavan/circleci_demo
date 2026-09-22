@@ -2,9 +2,9 @@ version: 2.1
 
 orbs:
 
-  python: circleci/python@3.1.0
+  python: circleci/python@3.1.0
 
-  aws-cli: circleci/aws-cli@5.2.0
+  aws-cli: circleci/aws-cli@5.2.0
 
 # ============================================================
 
@@ -14,203 +14,203 @@ orbs:
 
 commands:
 
-  install-dependencies:
+  install-dependencies:
 
-    description: Install Python and dbt dependencies with Poetry
+    description: Install Python and dbt dependencies with Poetry
 
-    steps:
+    steps:
 
-      - checkout
+      - checkout
 
-      - run:
+      - run:
 
-          name: Configure Poetry
+          name: Configure Poetry
 
-          command: |
+          command: |
 
-            poetry config virtualenvs.in-project true
+            poetry config virtualenvs.in-project true
 
-      - python/install-packages:
+      - python/install-packages:
 
-          pkg-manager: poetry
+          pkg-manager: poetry
 
-          args: --with dev
+          args: --with dev
 
-  configure-aws-oidc:
+  configure-aws-oidc:
 
-    description: Configure AWS credentials using CircleCI OIDC
+    description: Configure AWS credentials using CircleCI OIDC
 
-    steps:
+    steps:
 
-      - aws-cli/setup:
+      - aws-cli/setup:
 
-          role_arn: $AWS_ROLE_ARN
+          role_arn: $AWS_ROLE_ARN
 
-          region: $AWS_REGION
+          region: $AWS_REGION
 
-      - run:
+      - run:
 
-          name: Verify AWS identity
+          name: Verify AWS identity
 
-          command: |
+          command: |
 
-            aws sts get-caller-identity
+            aws sts get-caller-identity
 
-  login-to-ecr:
+  login-to-ecr:
 
-    description: Login to Amazon ECR
+    description: Login to Amazon ECR
 
-    steps:
+    steps:
 
-      - run:
+      - run:
 
-          name: Login to ECR
+          name: Login to ECR
 
-          command: |
+          command: |
 
-            aws ecr get-login-password \
+            aws ecr get-login-password \
 
-              --region "$AWS_REGION" |
+              --region "$AWS_REGION" |
 
-              docker login \
+              docker login \
 
-                --username AWS \
+                --username AWS \
 
-                --password-stdin \
+                --password-stdin \
 
-                "$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com"
+                "$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com"
 
-  run-ecs-task:
+  run-ecs-task:
 
-    description: >
+    description: >
 
-      Register a new task-definition revision pointing at the image just built,
+      Register a new task-definition revision pointing at the image just built,
 
-      run it as a one-off ECS Fargate task, and fail the build if dbt fails.
+      run it as a one-off ECS Fargate task, and fail the build if dbt fails.
 
-      ECR repositories here are IMAGE_TAG_MUTABILITY=IMMUTABLE, so the
+      ECR repositories here are IMAGE_TAG_MUTABILITY=IMMUTABLE, so the
 
-      registered task definition can never just reference ":latest" — each
+      registered task definition can never just reference ":latest" — each
 
-      run gets its own revision pinned to the exact tag pushed this build.
+      run gets its own revision pinned to the exact tag pushed this build.
 
-    parameters:
+    parameters:
 
-      cluster:
+      cluster:
 
-        type: string
+        type: string
 
-      task-definition-family:
+      task-definition-family:
 
-        type: string
+        type: string
 
-      ecr-repository-env-var:
+      ecr-repository-env-var:
 
-        type: string
+        type: string
 
-      image-tag:
+      image-tag:
 
-        type: string
+        type: string
 
-      subnet-ids:
+      subnet-ids:
 
-        type: string
+        type: string
 
-      security-group-id:
+      security-group-id:
 
-        type: string
+        type: string
 
-      public-ip-status:
+      public-ip-status:
 
-        type: string
+        type: string
 
-        default: DISABLED
+        default: DISABLED
 
-    steps:
+    steps:
 
-      - run:
+      - run:
 
-          name: Run dbt on ECS Fargate (<<parameters.task-definition-family>>)
+          name: Run dbt on ECS Fargate (<<parameters.task-definition-family>>)
 
-          command: |
+          command: |
 
-            IMAGE_URI="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${<<parameters.ecr-repository-env-var>>}:<<parameters.image-tag>>"
+            IMAGE_URI="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${<<parameters.ecr-repository-env-var>>}:<<parameters.image-tag>>"
 
-            NEW_TASK_DEF_JSON=$(aws ecs describe-task-definition \
+            NEW_TASK_DEF_JSON=$(aws ecs describe-task-definition \
 
-              --task-definition "<<parameters.task-definition-family>>" \
+              --task-definition "<<parameters.task-definition-family>>" \
 
-              --query 'taskDefinition' | \
+              --query 'taskDefinition' | \
 
-              jq --arg IMAGE "$IMAGE_URI" \
+              jq --arg IMAGE "$IMAGE_URI" \
 
-                '.containerDefinitions[0].image = $IMAGE
+                '.containerDefinitions[0].image = $IMAGE
 
-                 | del(.taskDefinitionArn, .revision, .status, .requiresAttributes,
+                 | del(.taskDefinitionArn, .revision, .status, .requiresAttributes,
 
-                       .compatibilities, .registeredAt, .registeredBy)')
+                       .compatibilities, .registeredAt, .registeredBy)')
 
-            NEW_TASK_DEF_ARN=$(aws ecs register-task-definition \
+            NEW_TASK_DEF_ARN=$(aws ecs register-task-definition \
 
-              --cli-input-json "$NEW_TASK_DEF_JSON" \
+              --cli-input-json "$NEW_TASK_DEF_JSON" \
 
-              --query 'taskDefinition.taskDefinitionArn' \
+              --query 'taskDefinition.taskDefinitionArn' \
 
-              --output text)
+              --output text)
 
-            echo "Registered task definition: ${NEW_TASK_DEF_ARN}"
+            echo "Registered task definition: ${NEW_TASK_DEF_ARN}"
 
-            echo "Image: ${IMAGE_URI}"
+            echo "Image: ${IMAGE_URI}"
 
-            TASK_ARN=$(aws ecs run-task \
+            TASK_ARN=$(aws ecs run-task \
 
-              --cluster "<<parameters.cluster>>" \
+              --cluster "<<parameters.cluster>>" \
 
-              --task-definition "$NEW_TASK_DEF_ARN" \
+              --task-definition "$NEW_TASK_DEF_ARN" \
 
-              --launch-type FARGATE \
+              --launch-type FARGATE \
 
-              --network-configuration "awsvpcConfiguration={subnets=[<<parameters.subnet-ids>>],securityGroups=[<<parameters.security-group-id>>],assignPublicIp=<<parameters.public-ip-status>>}" \
+              --network-configuration "awsvpcConfiguration={subnets=[<<parameters.subnet-ids>>],securityGroups=[<<parameters.security-group-id>>],assignPublicIp=<<parameters.public-ip-status>>}" \
 
-              --query 'tasks[0].taskArn' \
+              --query 'tasks[0].taskArn' \
 
-              --output text)
+              --output text)
 
-            if [ -z "$TASK_ARN" ] || [ "$TASK_ARN" = "None" ]; then
+            if [ -z "$TASK_ARN" ] || [ "$TASK_ARN" = "None" ]; then
 
-              echo "ecs run-task did not return a task ARN"
+              echo "ecs run-task did not return a task ARN"
 
-              exit 1
+              exit 1
 
-            fi
+            fi
 
-            echo "Started task: ${TASK_ARN}"
+            echo "Started task: ${TASK_ARN}"
 
-            aws ecs wait tasks-stopped \
+            aws ecs wait tasks-stopped \
 
-              --cluster "<<parameters.cluster>>" \
+              --cluster "<<parameters.cluster>>" \
 
-              --tasks "$TASK_ARN"
+              --tasks "$TASK_ARN"
 
-            EXIT_CODE=$(aws ecs describe-tasks \
+            EXIT_CODE=$(aws ecs describe-tasks \
 
-              --cluster "<<parameters.cluster>>" \
+              --cluster "<<parameters.cluster>>" \
 
-              --tasks "$TASK_ARN" \
+              --tasks "$TASK_ARN" \
 
-              --query 'tasks[0].containers[0].exitCode' \
+              --query 'tasks[0].containers[0].exitCode' \
 
-              --output text)
+              --output text)
 
-            echo "dbt task exit code: ${EXIT_CODE}"
+            echo "dbt task exit code: ${EXIT_CODE}"
 
-            if [ "$EXIT_CODE" != "0" ]; then
+            if [ "$EXIT_CODE" != "0" ]; then
 
-              echo "dbt run failed — check CloudWatch Logs for this task's log stream"
+              echo "dbt run failed — check CloudWatch Logs for this task's log stream"
 
-              exit 1
+              exit 1
 
-            fi
+            fi
 
 
 # ============================================================
@@ -221,216 +221,216 @@ commands:
 
 jobs:
 
-  
 
-  # ----------------------------------------------------------
 
-  # QA
+  # ----------------------------------------------------------
 
-  #
+  # QA
 
-  # main → build image → QA ECR
+  #
 
-  #
+  # main → build image → QA ECR
 
-  # NON-PROD AWS ACCOUNT
+  #
 
-  # ----------------------------------------------------------
+  # NON-PROD AWS ACCOUNT
 
-  build-push-qa:
+  # ----------------------------------------------------------
 
-    machine:
+  build-push-qa:
 
-      image: ubuntu-2204:current
+    machine:
 
-    steps:
+      image: ubuntu-2204:current
 
-      - checkout
+    steps:
 
-      - configure-aws-oidc
+      - checkout
 
-      - login-to-ecr
+      - configure-aws-oidc
 
-      - run:
+      - login-to-ecr
 
-          name: Build and push QA image
+      - run:
 
-          command: |
+          name: Build and push QA image
 
-            IMAGE_URI="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${QA_ECR_REPOSITORY}"
+          command: |
 
-            IMAGE_TAG="${CIRCLE_SHA1}-${CIRCLE_BUILD_NUM}"
+            IMAGE_URI="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${QA_ECR_REPOSITORY}"
 
-            docker build \
+            IMAGE_TAG="${CIRCLE_SHA1}-${CIRCLE_BUILD_NUM}"
 
-              --tag "${IMAGE_URI}:${IMAGE_TAG}" \
+            docker build \
 
-              .
+              --tag "${IMAGE_URI}:${IMAGE_TAG}" \
 
-            docker push \
+              .
 
-              "${IMAGE_URI}:${IMAGE_TAG}"
+            docker push \
 
-            echo "QA image:"
+              "${IMAGE_URI}:${IMAGE_TAG}"
 
-            echo "${IMAGE_URI}:${IMAGE_TAG}"
+            echo "QA image:"
 
-      - run-ecs-task:
+            echo "${IMAGE_URI}:${IMAGE_TAG}"
 
-          cluster: umed-app-ecs-cluster-qa
+      - run-ecs-task:
 
-          task-definition-family: umed-app-task-qa
+          cluster: umed-app-ecs-cluster-qa
 
-          ecr-repository-env-var: QA_ECR_REPOSITORY
+          task-definition-family: umed-app-task-qa
 
-          image-tag: ${CIRCLE_SHA1}-${CIRCLE_BUILD_NUM}
+          ecr-repository-env-var: QA_ECR_REPOSITORY
 
-          subnet-ids: $SUBNET_IDS
+          image-tag: ${CIRCLE_SHA1}-${CIRCLE_BUILD_NUM}
 
-          security-group-id: $SECURITY_GROUP_ID
+          subnet-ids: $SUBNET_IDS
 
-          public-ip-status: $PUBLIC_IP_STATUS
+          security-group-id: $SECURITY_GROUP_ID
 
-  # ----------------------------------------------------------
+          public-ip-status: $PUBLIC_IP_STATUS
 
-  # UAT
+  # ----------------------------------------------------------
 
-  #
+  # UAT
 
-  # RC tag → manual approval → build → UAT ECR
+  #
 
-  #
+  # RC tag → manual approval → build → UAT ECR
 
-  # NON-PROD AWS ACCOUNT
+  #
 
-  # ----------------------------------------------------------
+  # NON-PROD AWS ACCOUNT
 
-  build-push-uat:
+  # ----------------------------------------------------------
 
-    machine:
+  build-push-uat:
 
-      image: ubuntu-2204:current
+    machine:
 
-    steps:
+      image: ubuntu-2204:current
 
-      - checkout
+    steps:
 
-      - configure-aws-oidc
+      - checkout
 
-      - login-to-ecr
+      - configure-aws-oidc
 
-      - run:
+      - login-to-ecr
 
-          name: Build and push UAT image
+      - run:
 
-          command: |
+          name: Build and push UAT image
 
-            IMAGE_URI="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${UAT_ECR_REPOSITORY}"
+          command: |
 
-            IMAGE_TAG="${CIRCLE_TAG}-${CIRCLE_BUILD_NUM}"
+            IMAGE_URI="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${UAT_ECR_REPOSITORY}"
 
-            echo "Release: ${CIRCLE_TAG}"
+            IMAGE_TAG="${CIRCLE_TAG}-${CIRCLE_BUILD_NUM}"
 
-            docker build \
+            echo "Release: ${CIRCLE_TAG}"
 
-              --tag "${IMAGE_URI}:${IMAGE_TAG}" \
+            docker build \
 
-              .
+              --tag "${IMAGE_URI}:${IMAGE_TAG}" \
 
-            docker push \
+              .
 
-              "${IMAGE_URI}:${IMAGE_TAG}"
+            docker push \
 
-            echo "UAT image:"
+              "${IMAGE_URI}:${IMAGE_TAG}"
 
-            echo "${IMAGE_URI}:${IMAGE_TAG}"
+            echo "UAT image:"
 
-      - run-ecs-task:
+            echo "${IMAGE_URI}:${IMAGE_TAG}"
 
-          cluster: umed-app-ecs-cluster-uat
+      - run-ecs-task:
 
-          task-definition-family: umed-app-task-uat
+          cluster: umed-app-ecs-cluster-uat
 
-          ecr-repository-env-var: UAT_ECR_REPOSITORY
+          task-definition-family: umed-app-task-uat
 
-          image-tag: ${CIRCLE_TAG}-${CIRCLE_BUILD_NUM}
+          ecr-repository-env-var: UAT_ECR_REPOSITORY
 
-          subnet-ids: $SUBNET_IDS
+          image-tag: ${CIRCLE_TAG}-${CIRCLE_BUILD_NUM}
 
-          security-group-id: $SECURITY_GROUP_ID
+          subnet-ids: $SUBNET_IDS
 
-          public-ip-status: $PUBLIC_IP_STATUS
+          security-group-id: $SECURITY_GROUP_ID
 
+          public-ip-status: $PUBLIC_IP_STATUS
 
-  # ----------------------------------------------------------
 
-  # PROD
+  # ----------------------------------------------------------
 
-  #
+  # PROD
 
-  # RC tag → manual approval → build → Prod ECR
+  #
 
-  #
+  # RC tag → manual approval → build → Prod ECR
 
-  # PROD AWS ACCOUNT
+  #
 
-  # ----------------------------------------------------------
+  # PROD AWS ACCOUNT
 
-  build-push-prod:
+  # ----------------------------------------------------------
 
-    machine:
+  build-push-prod:
 
-      image: ubuntu-2204:current
+    machine:
 
-    steps:
+      image: ubuntu-2204:current
 
-      - checkout
+    steps:
 
-      - configure-aws-oidc
+      - checkout
 
-      - login-to-ecr
+      - configure-aws-oidc
 
-      - run:
+      - login-to-ecr
 
-          name: Build and push PROD image
+      - run:
 
-          command: |
+          name: Build and push PROD image
 
-            IMAGE_URI="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${PROD_ECR_REPOSITORY}"
+          command: |
 
-            IMAGE_TAG="${CIRCLE_TAG}-${CIRCLE_BUILD_NUM}"
+            IMAGE_URI="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${PROD_ECR_REPOSITORY}"
 
-            echo "Release: ${CIRCLE_TAG}"
+            IMAGE_TAG="${CIRCLE_TAG}-${CIRCLE_BUILD_NUM}"
 
-            docker build \
+            echo "Release: ${CIRCLE_TAG}"
 
-              --tag "${IMAGE_URI}:${IMAGE_TAG}" \
+            docker build \
 
-              .
+              --tag "${IMAGE_URI}:${IMAGE_TAG}" \
 
-            docker push \
+              .
 
-              "${IMAGE_URI}:${IMAGE_TAG}"
+            docker push \
 
-            echo "PROD image:"
+              "${IMAGE_URI}:${IMAGE_TAG}"
 
-            echo "${IMAGE_URI}:${IMAGE_TAG}"
+            echo "PROD image:"
 
-      - run-ecs-task:
+            echo "${IMAGE_URI}:${IMAGE_TAG}"
 
-          cluster: umed-app-ecs-cluster
+      - run-ecs-task:
 
-          task-definition-family: umed-app-task
+          cluster: umed-app-ecs-cluster
 
-          ecr-repository-env-var: PROD_ECR_REPOSITORY
+          task-definition-family: umed-app-task
 
-          image-tag: ${CIRCLE_TAG}-${CIRCLE_BUILD_NUM}
+          ecr-repository-env-var: PROD_ECR_REPOSITORY
 
-          subnet-ids: $SUBNET_IDS
+          image-tag: ${CIRCLE_TAG}-${CIRCLE_BUILD_NUM}
 
-          security-group-id: $SECURITY_GROUP_ID
+          subnet-ids: $SUBNET_IDS
 
-          public-ip-status: $PUBLIC_IP_STATUS
+          security-group-id: $SECURITY_GROUP_ID
+
+          public-ip-status: $PUBLIC_IP_STATUS
 
 # ============================================================
 
@@ -440,151 +440,151 @@ jobs:
 
 workflows:
 
-  # ==========================================================
+  # ==========================================================
 
-  # MAIN → QA
+  # MAIN → QA
 
-  #
+  #
 
-  # Merge to main
+  # Merge to main
 
-  #       ↓
+  #       ↓
 
-  # Build image
+  # Build image
 
-  #       ↓
+  #       ↓
 
-  # Push → QA ECR
+  # Push → QA ECR
 
-  #
+  #
 
-  # NON-PROD OIDC
+  # NON-PROD OIDC
 
-  # ==========================================================
+  # ==========================================================
 
-  qa:
+  qa:
 
-    jobs:
+    jobs:
 
-      - build-push-qa:
+      - build-push-qa:
 
-          context: us-dbt
+          context: us-dbt
 
-          filters:
+          filters:
 
-            branches:
+            branches:
 
-              only:
+              only:
 
-                - main
+                - main
 
-            tags:
+            tags:
 
-              ignore: /.*/
-
-
-  # ==========================================================
-
-  # RELEASE CANDIDATE → UAT
-
-  #
-
-  # v1.0.0-rc-0
-
-  #       ↓
-
-  # Manual approval
-
-  #       ↓
-
-  # Build image
-
-  #       ↓
-
-  # Push → UAT ECR
-
-  #
-
-  # NON-PROD OIDC
-
-  # ==========================================================
-
-  release-candidate:
-
-    jobs:
-
-      - approve-uat:
-
-          type: approval
-
-          filters: &rc-tag-only
-
-            branches:
-
-              ignore: /.*/
-
-            tags:
-
-              only: /^v\d+\.\d+\.\d+-rc-\d+$/
+              ignore: /.*/
 
 
-      - build-push-uat:
+  # ==========================================================
 
-          requires:
+  # RELEASE CANDIDATE → UAT
 
-            - approve-uat
+  #
 
-          context: us-dbt
+  # v1.0.0-rc-0
 
-          filters:
+  #       ↓
+
+  # Manual approval
+
+  #       ↓
+
+  # Build image
+
+  #       ↓
+
+  # Push → UAT ECR
+
+  #
+
+  # NON-PROD OIDC
+
+  # ==========================================================
+
+  release-candidate:
+
+    jobs:
+
+      - approve-uat:
+
+          type: approval
+
+          filters: &rc-tag-only
+
+            branches:
+
+              ignore: /.*/
+
+            tags:
+
+              only: /^v\d+\.\d+\.\d+-rc-\d+$/
+
+
+      - build-push-uat:
+
+          requires:
+
+            - approve-uat
+
+          context: us-dbt
+
+          filters:
 <<: *rc-tag-only
 
 
-      # ======================================================
+      # ======================================================
 
-      # UAT VALIDATION → PROD
+      # UAT VALIDATION → PROD
 
-      #
+      #
 
-      # UAT validation
+      # UAT validation
 
-      #       ↓
+      #       ↓
 
-      # Manual prod approval
+      # Manual prod approval
 
-      #       ↓
+      #       ↓
 
-      # Build image
+      # Build image
 
-      #       ↓
+      #       ↓
 
-      # Push → Prod ECR
+      # Push → Prod ECR
 
-      #
+      #
 
-      # PROD OIDC
+      # PROD OIDC
 
-      # ======================================================
+      # ======================================================
 
-      - approve-prod:
+      - approve-prod:
 
-          type: approval
+          type: approval
 
-          requires:
+          requires:
 
-            - build-push-uat
+            - build-push-uat
 
-          filters:
+          filters:
 <<: *rc-tag-only
 
 
-      - build-push-prod:
+      - build-push-prod:
 
-          requires:
+          requires:
 
-            - approve-prod
+            - approve-prod
 
-          context: us-dbt
+          context: us-dbt
 
-          filters:
+          filters:
 <<: *rc-tag-only
