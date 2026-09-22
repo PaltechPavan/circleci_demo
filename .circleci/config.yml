@@ -1,250 +1,160 @@
 version: 2.1
 
 orbs:
-
   python: circleci/python@3.1.0
-
   aws-cli: circleci/aws-cli@5.2.0
 
 # ============================================================
-
 # REUSABLE COMMANDS
-
 # ============================================================
 
 commands:
 
   install-dependencies:
-
     description: Install Python and dbt dependencies with Poetry
-
     steps:
-
       - checkout
-
       - run:
-
           name: Configure Poetry
-
           command: |
-
             poetry config virtualenvs.in-project true
 
       - python/install-packages:
-
           pkg-manager: poetry
-
           args: --with dev
 
   configure-aws-oidc:
-
     description: Configure AWS credentials using CircleCI OIDC
-
     steps:
-
       - aws-cli/setup:
-
           role_arn: $AWS_ROLE_ARN
-
           region: $AWS_REGION
 
       - run:
-
-          name: Verify AWS identity
-
+          name: Verify AWS Identity
           command: |
-
             aws sts get-caller-identity
 
   login-to-ecr:
-
     description: Login to Amazon ECR
-
     steps:
-
       - run:
-
           name: Login to ECR
-
           command: |
-
-            aws ecr get-login-password \
-
-              --region "$AWS_REGION" |
-
-              docker login \
-
-                --username AWS \
-
-                --password-stdin \
-
-                "$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com"
+            aws ecr get-login-password --region "$AWS_REGION" | \
+            docker login \
+              --username AWS \
+              --password-stdin \
+              "$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com"
 
   run-ecs-task:
-
     description: >
-
-      Register a new task-definition revision pointing at the image just built,
-
-      run it as a one-off ECS Fargate task, and fail the build if dbt fails.
-
-      ECR repositories here are IMAGE_TAG_MUTABILITY=IMMUTABLE, so the
-
-      registered task definition can never just reference ":latest" — each
-
-      run gets its own revision pinned to the exact tag pushed this build.
+      Register a new ECS task-definition revision using the newly built image,
+      run it as a one-off Fargate task, wait for completion, and fail if dbt fails.
 
     parameters:
-
       cluster:
-
         type: string
 
       task-definition-family:
-
         type: string
 
       ecr-repository-env-var:
-
         type: string
 
       image-tag:
-
         type: string
 
       subnet-ids:
-
         type: string
 
       security-group-id:
-
         type: string
 
       public-ip-status:
-
         type: string
-
         default: DISABLED
 
     steps:
-
       - run:
-
-          name: Run dbt on ECS Fargate (<<parameters.task-definition-family>>)
-
+          name: Run dbt on ECS Fargate (<< parameters.task-definition-family >>)
           command: |
 
-            IMAGE_URI="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${<<parameters.ecr-repository-env-var>>}:<<parameters.image-tag>>"
+            IMAGE_URI="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${<< parameters.ecr-repository-env-var >>}:<< parameters.image-tag >>"
 
             NEW_TASK_DEF_JSON=$(aws ecs describe-task-definition \
-
-              --task-definition "<<parameters.task-definition-family>>" \
-
+              --task-definition "<< parameters.task-definition-family >>" \
               --query 'taskDefinition' | \
-
-              jq --arg IMAGE "$IMAGE_URI" \
-
-                '.containerDefinitions[0].image = $IMAGE
-
-                 | del(.taskDefinitionArn, .revision, .status, .requiresAttributes,
-
-                       .compatibilities, .registeredAt, .registeredBy)')
+              jq --arg IMAGE "$IMAGE_URI" '
+                .containerDefinitions[0].image=$IMAGE |
+                del(
+                  .taskDefinitionArn,
+                  .revision,
+                  .status,
+                  .requiresAttributes,
+                  .compatibilities,
+                  .registeredAt,
+                  .registeredBy
+                )'
+            )
 
             NEW_TASK_DEF_ARN=$(aws ecs register-task-definition \
-
               --cli-input-json "$NEW_TASK_DEF_JSON" \
-
               --query 'taskDefinition.taskDefinitionArn' \
-
               --output text)
 
-            echo "Registered task definition: ${NEW_TASK_DEF_ARN}"
-
-            echo "Image: ${IMAGE_URI}"
+            echo "Registered Task Definition:"
+            echo "$NEW_TASK_DEF_ARN"
 
             TASK_ARN=$(aws ecs run-task \
-
-              --cluster "<<parameters.cluster>>" \
-
+              --cluster "<< parameters.cluster >>" \
               --task-definition "$NEW_TASK_DEF_ARN" \
-
               --launch-type FARGATE \
-
-              --network-configuration "awsvpcConfiguration={subnets=[<<parameters.subnet-ids>>],securityGroups=[<<parameters.security-group-id>>],assignPublicIp=<<parameters.public-ip-status>>}" \
-
+              --network-configuration "awsvpcConfiguration={subnets=[<< parameters.subnet-ids >>],securityGroups=[<< parameters.security-group-id >>],assignPublicIp=<< parameters.public-ip-status >>}" \
               --query 'tasks[0].taskArn' \
-
               --output text)
 
             if [ -z "$TASK_ARN" ] || [ "$TASK_ARN" = "None" ]; then
-
-              echo "ecs run-task did not return a task ARN"
-
+              echo "ERROR: ECS task failed to start."
               exit 1
-
             fi
 
-            echo "Started task: ${TASK_ARN}"
+            echo "Started task:"
+            echo "$TASK_ARN"
 
             aws ecs wait tasks-stopped \
-
-              --cluster "<<parameters.cluster>>" \
-
+              --cluster "<< parameters.cluster >>" \
               --tasks "$TASK_ARN"
 
             EXIT_CODE=$(aws ecs describe-tasks \
-
-              --cluster "<<parameters.cluster>>" \
-
+              --cluster "<< parameters.cluster >>" \
               --tasks "$TASK_ARN" \
-
               --query 'tasks[0].containers[0].exitCode' \
-
               --output text)
 
-            echo "dbt task exit code: ${EXIT_CODE}"
+            echo "dbt Exit Code: $EXIT_CODE"
 
             if [ "$EXIT_CODE" != "0" ]; then
-
-              echo "dbt run failed — check CloudWatch Logs for this task's log stream"
-
+              echo "dbt execution failed."
               exit 1
-
             fi
 
-
 # ============================================================
-
 # JOBS
-
 # ============================================================
 
 jobs:
 
-
-
-  # ----------------------------------------------------------
-
+  # ==========================================================
   # QA
-
-  #
-
-  # main → build image → QA ECR
-
-  #
-
-  # NON-PROD AWS ACCOUNT
-
-  # ----------------------------------------------------------
+  # main -> Build -> QA ECR -> QA ECS
+  # ==========================================================
 
   build-push-qa:
-
     machine:
-
       image: ubuntu-2204:current
 
     steps:
-
       - checkout
 
       - configure-aws-oidc
@@ -252,67 +162,46 @@ jobs:
       - login-to-ecr
 
       - run:
+          name: Install jq
+          command: |
+            sudo apt-get update
+            sudo apt-get install -y jq
 
-          name: Build and push QA image
-
+      - run:
+          name: Build and Push QA Image
           command: |
 
             IMAGE_URI="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${QA_ECR_REPOSITORY}"
-
             IMAGE_TAG="${CIRCLE_SHA1}-${CIRCLE_BUILD_NUM}"
 
             docker build \
-
               --tag "${IMAGE_URI}:${IMAGE_TAG}" \
-
               .
 
-            docker push \
+            docker push "${IMAGE_URI}:${IMAGE_TAG}"
 
-              "${IMAGE_URI}:${IMAGE_TAG}"
-
-            echo "QA image:"
-
+            echo "QA Image:"
             echo "${IMAGE_URI}:${IMAGE_TAG}"
 
       - run-ecs-task:
-
           cluster: umed-app-ecs-cluster-qa
-
           task-definition-family: umed-app-task-qa
-
           ecr-repository-env-var: QA_ECR_REPOSITORY
-
           image-tag: ${CIRCLE_SHA1}-${CIRCLE_BUILD_NUM}
-
           subnet-ids: $SUBNET_IDS
-
           security-group-id: $SECURITY_GROUP_ID
-
           public-ip-status: $PUBLIC_IP_STATUS
 
-  # ----------------------------------------------------------
-
+  # ==========================================================
   # UAT
-
-  #
-
-  # RC tag → manual approval → build → UAT ECR
-
-  #
-
-  # NON-PROD AWS ACCOUNT
-
-  # ----------------------------------------------------------
+  # Release Tag -> Approval -> Build -> UAT ECR -> UAT ECS
+  # ==========================================================
 
   build-push-uat:
-
     machine:
-
       image: ubuntu-2204:current
 
     steps:
-
       - checkout
 
       - configure-aws-oidc
@@ -320,70 +209,46 @@ jobs:
       - login-to-ecr
 
       - run:
+          name: Install jq
+          command: |
+            sudo apt-get update
+            sudo apt-get install -y jq
 
-          name: Build and push UAT image
-
+      - run:
+          name: Build and Push UAT Image
           command: |
 
             IMAGE_URI="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${UAT_ECR_REPOSITORY}"
-
             IMAGE_TAG="${CIRCLE_TAG}-${CIRCLE_BUILD_NUM}"
 
-            echo "Release: ${CIRCLE_TAG}"
-
             docker build \
-
               --tag "${IMAGE_URI}:${IMAGE_TAG}" \
-
               .
 
-            docker push \
+            docker push "${IMAGE_URI}:${IMAGE_TAG}"
 
-              "${IMAGE_URI}:${IMAGE_TAG}"
-
-            echo "UAT image:"
-
+            echo "UAT Image:"
             echo "${IMAGE_URI}:${IMAGE_TAG}"
 
       - run-ecs-task:
-
           cluster: umed-app-ecs-cluster-uat
-
           task-definition-family: umed-app-task-uat
-
           ecr-repository-env-var: UAT_ECR_REPOSITORY
-
           image-tag: ${CIRCLE_TAG}-${CIRCLE_BUILD_NUM}
-
           subnet-ids: $SUBNET_IDS
-
           security-group-id: $SECURITY_GROUP_ID
-
           public-ip-status: $PUBLIC_IP_STATUS
 
-
-  # ----------------------------------------------------------
-
+  # ==========================================================
   # PROD
-
-  #
-
-  # RC tag → manual approval → build → Prod ECR
-
-  #
-
-  # PROD AWS ACCOUNT
-
-  # ----------------------------------------------------------
+  # Release Tag -> Approval -> Build -> PROD ECR -> PROD ECS
+  # ==========================================================
 
   build-push-prod:
-
     machine:
-
       image: ubuntu-2204:current
 
     steps:
-
       - checkout
 
       - configure-aws-oidc
@@ -391,200 +256,100 @@ jobs:
       - login-to-ecr
 
       - run:
+          name: Install jq
+          command: |
+            sudo apt-get update
+            sudo apt-get install -y jq
 
-          name: Build and push PROD image
-
+      - run:
+          name: Build and Push PROD Image
           command: |
 
             IMAGE_URI="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${PROD_ECR_REPOSITORY}"
-
             IMAGE_TAG="${CIRCLE_TAG}-${CIRCLE_BUILD_NUM}"
 
-            echo "Release: ${CIRCLE_TAG}"
-
             docker build \
-
               --tag "${IMAGE_URI}:${IMAGE_TAG}" \
-
               .
 
-            docker push \
+            docker push "${IMAGE_URI}:${IMAGE_TAG}"
 
-              "${IMAGE_URI}:${IMAGE_TAG}"
-
-            echo "PROD image:"
-
+            echo "PROD Image:"
             echo "${IMAGE_URI}:${IMAGE_TAG}"
 
       - run-ecs-task:
-
           cluster: umed-app-ecs-cluster
-
           task-definition-family: umed-app-task
-
           ecr-repository-env-var: PROD_ECR_REPOSITORY
-
           image-tag: ${CIRCLE_TAG}-${CIRCLE_BUILD_NUM}
-
           subnet-ids: $SUBNET_IDS
-
           security-group-id: $SECURITY_GROUP_ID
-
           public-ip-status: $PUBLIC_IP_STATUS
 
 # ============================================================
-
 # WORKFLOWS
-
 # ============================================================
 
 workflows:
 
   # ==========================================================
-
-  # MAIN → QA
-
-  #
-
-  # Merge to main
-
-  #       ↓
-
-  # Build image
-
-  #       ↓
-
-  # Push → QA ECR
-
-  #
-
-  # NON-PROD OIDC
-
+  # Merge to main -> QA Deployment
   # ==========================================================
 
   qa:
-
     jobs:
-
       - build-push-qa:
-
           context: us-dbt
-
           filters:
-
             branches:
-
               only:
-
                 - main
-
             tags:
-
               ignore: /.*/
 
-
   # ==========================================================
-
-  # RELEASE CANDIDATE → UAT
-
-  #
-
-  # v1.0.0-rc-0
-
-  #       ↓
-
-  # Manual approval
-
-  #       ↓
-
-  # Build image
-
-  #       ↓
-
-  # Push → UAT ECR
-
-  #
-
-  # NON-PROD OIDC
-
+  # Release Candidate
+  # Tag Example:
+  #   v1.0.0-rc-0
   # ==========================================================
 
   release-candidate:
-
     jobs:
 
       - approve-uat:
-
           type: approval
-
-          filters: &rc-tag-only
-
+          filters:
             branches:
-
               ignore: /.*/
-
             tags:
-
               only: /^v\d+\.\d+\.\d+-rc-\d+$/
 
-
       - build-push-uat:
-
-          requires:
-
-            - approve-uat
-
           context: us-dbt
-
+          requires:
+            - approve-uat
           filters:
-<<: *rc-tag-only
-
-
-      # ======================================================
-
-      # UAT VALIDATION → PROD
-
-      #
-
-      # UAT validation
-
-      #       ↓
-
-      # Manual prod approval
-
-      #       ↓
-
-      # Build image
-
-      #       ↓
-
-      # Push → Prod ECR
-
-      #
-
-      # PROD OIDC
-
-      # ======================================================
+            branches:
+              ignore: /.*/
+            tags:
+              only: /^v\d+\.\d+\.\d+-rc-\d+$/
 
       - approve-prod:
-
           type: approval
-
           requires:
-
             - build-push-uat
-
           filters:
-<<: *rc-tag-only
-
+            branches:
+              ignore: /.*/
+            tags:
+              only: /^v\d+\.\d+\.\d+-rc-\d+$/
 
       - build-push-prod:
-
-          requires:
-
-            - approve-prod
-
           context: us-dbt
-
+          requires:
+            - approve-prod
           filters:
-<<: *rc-tag-only
+            branches:
+              ignore: /.*/
+            tags:
+              only: /^v\d+\.\d+\.\d+-rc-\d+$/
