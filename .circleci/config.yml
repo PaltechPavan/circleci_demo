@@ -171,7 +171,7 @@ jobs:
           name: Build and Push QA Image
           command: |
 
-            IMAGE_URI="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${dbt-athena-demo}"
+            IMAGE_URI="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${QA_ECR_REPOSITORY}"
             IMAGE_TAG="${CIRCLE_SHA1}-${CIRCLE_BUILD_NUM}"
 
             docker build \
@@ -218,7 +218,7 @@ jobs:
           name: Build and Push UAT Image
           command: |
 
-            IMAGE_URI="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ecr-uat}"
+            IMAGE_URI="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${UAT_ECR_REPOSITORY}"
             IMAGE_TAG="${CIRCLE_TAG}-${CIRCLE_BUILD_NUM}"
 
             docker build \
@@ -265,7 +265,7 @@ jobs:
           name: Build and Push PROD Image
           command: |
 
-            IMAGE_URI="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ecr-prod}"
+            IMAGE_URI="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${PROD_ECR_REPOSITORY}"
             IMAGE_TAG="${CIRCLE_TAG}-${CIRCLE_BUILD_NUM}"
 
             docker build \
