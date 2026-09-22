@@ -184,8 +184,8 @@ jobs:
             echo "${IMAGE_URI}:${IMAGE_TAG}"
 
       - run-ecs-task:
-          cluster: umed-app-ecs-cluster-qa
-          task-definition-family: umed-app-task-qa
+          cluster: dbt-cluster
+          task-definition-family: striking-service-swrqgh
           ecr-repository-env-var: QA_ECR_REPOSITORY
           image-tag: ${CIRCLE_SHA1}-${CIRCLE_BUILD_NUM}
           subnet-ids: $SUBNET_IDS
@@ -231,7 +231,7 @@ jobs:
             echo "${IMAGE_URI}:${IMAGE_TAG}"
 
       - run-ecs-task:
-          cluster: umed-app-ecs-cluster-uat
+          cluster: ecs-uat
           task-definition-family: umed-app-task-uat
           ecr-repository-env-var: UAT_ECR_REPOSITORY
           image-tag: ${CIRCLE_TAG}-${CIRCLE_BUILD_NUM}
@@ -278,7 +278,7 @@ jobs:
             echo "${IMAGE_URI}:${IMAGE_TAG}"
 
       - run-ecs-task:
-          cluster: umed-app-ecs-cluster
+          cluster: ecs-prod
           task-definition-family: umed-app-task
           ecr-repository-env-var: PROD_ECR_REPOSITORY
           image-tag: ${CIRCLE_TAG}-${CIRCLE_BUILD_NUM}
