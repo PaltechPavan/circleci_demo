@@ -257,7 +257,7 @@ workflows:
   qa:
     jobs:
       - build-push-qa:
-          context: us-dbt-nonprod
+          context: us-dbt
           filters:
             branches:
               only:
@@ -278,7 +278,7 @@ workflows:
       - build-push-uat:
           requires:
             - approve-uat
-          context: us-dbt-nonprod
+          context: us-dbt
           filters:
             <<: *rc-tag-only
 
@@ -292,6 +292,6 @@ workflows:
       - build-push-prod:
           requires:
             - approve-prod
-          context: us-dbt-prod
+          context: us-dbt
           filters:
             <<: *rc-tag-only
