@@ -202,7 +202,7 @@ jobs:
 
       - run-ecs-task:
           cluster: ecs-uat
-          task-definition-family: qa-task-definition
+          task-definition-family: uat-task-definition
           ecr-repository-env-var: UAT_ECR_REPOSITORY
           image-tag: ${CIRCLE_TAG}-${CIRCLE_BUILD_NUM}
           subnet-ids: $SUBNET_IDS
