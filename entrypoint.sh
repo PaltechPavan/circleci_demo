@@ -2,68 +2,165 @@
 set -e
 
 echo "========================================"
-echo "Current Directory"
+echo "Starting dbt container"
 echo "========================================"
-pwd
+
+echo "Environment: ${ENVIRONMENT}"
+echo "State Bucket: ${DBT_STATE_BUCKET}"
+
+# ------------------------------------------------------------
+# 1. Basic configuration
+# ------------------------------------------------------------
+
+if [ -z "${ENVIRONMENT}" ]; then
+    echo "ERROR: ENVIRONMENT is not set"
+    exit 1
+fi
+
+if [ -z "${DBT_STATE_BUCKET}" ]; then
+    echo "ERROR: DBT_STATE_BUCKET is not set"
+    exit 1
+fi
+
+STATE_KEY="${ENVIRONMENT}/manifest.json"
+STATE_S3_PATH="s3://${DBT_STATE_BUCKET}/${STATE_KEY}"
+STATE_DIR="/tmp/dbt-state"
+STATE_MANIFEST="${STATE_DIR}/manifest.json"
+
+mkdir -p "${STATE_DIR}"
+
+echo "Environment     : ${ENVIRONMENT}"
+echo "State S3 path   : ${STATE_S3_PATH}"
+echo "State directory : ${STATE_DIR}"
+
+# ------------------------------------------------------------
+# 2. Install dbt packages
+# ------------------------------------------------------------
 
 echo "========================================"
-echo "Files in /app"
+echo "Running dbt deps"
 echo "========================================"
-find /app -maxdepth 3
+
+dbt deps
+
+# ------------------------------------------------------------
+# 3. dbt debug
+# ------------------------------------------------------------
 
 echo "========================================"
-echo "packages.yml"
+echo "Running dbt debug"
 echo "========================================"
-cat /app/packages.yml
 
-echo "========================================"
-echo "Installed Python Packages"
-echo "========================================"
-pip freeze | grep dbt
-
-echo "========================================"
-echo "Python Site Packages"
-echo "========================================"
-python -c "
-import site
-for p in site.getsitepackages():
-    print(p)
-"
-
-echo "========================================"
-echo "Athena Adapter Location"
-echo "========================================"
-python -c "
-import dbt.adapters.athena
-print(dbt.adapters.athena.__file__)
-"
-
-echo "========================================"
-echo "All dbt_project.yml Files"
-echo "========================================"
-find / -name dbt_project.yml 2>/dev/null
-
-echo "========================================"
-echo "All dbt_athena Directories"
-echo "========================================"
-find / -type d -name "dbt_athena" 2>/dev/null
-
-echo "========================================"
-echo "dbt_packages Directory"
-echo "========================================"
-find /app/dbt_packages 2>/dev/null || echo "No dbt_packages directory"
-
-echo "========================================"
-echo "Running dbt Debug"
-echo "========================================"
 dbt debug
 
-echo "========================================"
-echo "Running dbt Parse"
-echo "========================================"
-dbt parse --debug
+# ------------------------------------------------------------
+# 4. Check whether previous successful state exists
+# ------------------------------------------------------------
 
 echo "========================================"
-echo "Running dbt Models"
+echo "Checking previous dbt state"
 echo "========================================"
-dbt run
+
+if aws s3api head-object \
+    --bucket "${DBT_STATE_BUCKET}" \
+    --key "${STATE_KEY}" \
+    >/dev/null 2>&1
+then
+
+    echo "Previous state FOUND"
+    echo "Downloading previous manifest..."
+
+    aws s3 cp \
+        "${STATE_S3_PATH}" \
+        "${STATE_MANIFEST}"
+
+    echo "Previous manifest downloaded:"
+    ls -lh "${STATE_MANIFEST}"
+
+    HAS_PREVIOUS_STATE="true"
+
+else
+
+    echo "No previous state found."
+    echo "This is the first deployment."
+
+    HAS_PREVIOUS_STATE="false"
+
+fi
+
+# ------------------------------------------------------------
+# 5. Generate current dbt manifest
+# ------------------------------------------------------------
+
+echo "========================================"
+echo "Generating current dbt manifest"
+echo "========================================"
+
+dbt parse
+
+echo "Current manifest:"
+ls -lh target/manifest.json
+
+# ------------------------------------------------------------
+# 6. Run dbt
+# ------------------------------------------------------------
+
+if [ "${HAS_PREVIOUS_STATE}" = "true" ]; then
+
+    echo "========================================"
+    echo "Running STATE-AWARE dbt build"
+    echo "========================================"
+
+    echo "Previous state:"
+    echo "${STATE_MANIFEST}"
+
+    echo "Selection:"
+    echo "state:modified+"
+
+    dbt build \
+        --select state:modified+ \
+        --state "${STATE_DIR}"
+
+else
+
+    echo "========================================"
+    echo "Running FULL dbt build"
+    echo "========================================"
+
+    dbt build
+
+fi
+
+# ------------------------------------------------------------
+# 7. dbt build succeeded
+# ------------------------------------------------------------
+
+echo "========================================"
+echo "dbt build SUCCESS"
+echo "========================================"
+
+echo "Current manifest:"
+ls -lh target/manifest.json
+
+# ------------------------------------------------------------
+# 8. Upload NEW successful state
+# ------------------------------------------------------------
+
+echo "========================================"
+echo "Updating dbt state in S3"
+echo "========================================"
+
+aws s3 cp \
+    target/manifest.json \
+    "${STATE_S3_PATH}"
+
+echo "========================================"
+echo "DBT STATE UPDATED SUCCESSFULLY"
+echo "========================================"
+
+echo "State location:"
+echo "${STATE_S3_PATH}"
+
+echo "========================================"
+echo "dbt deployment completed successfully"
+echo "========================================"
