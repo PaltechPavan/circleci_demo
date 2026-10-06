@@ -99,6 +99,19 @@ commands:
               --task-definition "$NEW_TASK_DEF_ARN" \
               --launch-type FARGATE \
               --network-configuration "awsvpcConfiguration={subnets=[<<parameters.subnet-ids>>],securityGroups=[<<parameters.security-group-id>>],assignPublicIp=<<parameters.public-ip-status>>}" \
+              --overrides '{
+                "containerOverrides": [
+                   {
+                     "name": "dbt",
+                     "environment": [
+                    {
+                       "name": "DBT_RUN_MODE",
+                       "value": "STATE_AWARE"
+                    }
+                   ]
+                  }
+                 ]
+                }' \
               --query 'tasks[0].taskArn' \
               --output text)
 
