@@ -1,2 +1,2 @@
 select *
-from umed_raw_ehr_db.identifier;
+from umed_raw_ehr_db.identifier limit 10;
