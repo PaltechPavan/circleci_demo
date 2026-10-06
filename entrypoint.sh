@@ -68,11 +68,70 @@ if aws s3api head-object \
 then
 
     echo "Previous state FOUND"
-    echo "Downloading previous manifest..."
+    echo "Previous manifest location:"
+    echo "${STATE_S3_PATH}"
 
-    aws s3 cp \
-        "${STATE_S3_PATH}" \
-        "${STATE_MANIFEST}"
+    # --------------------------------------------------------
+    # 4.1 Download previous manifest with retry
+    # --------------------------------------------------------
+
+    MAX_ATTEMPTS=3
+    ATTEMPT=1
+    DOWNLOAD_SUCCESS="false"
+
+    while [ "${ATTEMPT}" -le "${MAX_ATTEMPTS}" ]; do
+
+        echo "----------------------------------------"
+        echo "Downloading previous manifest"
+        echo "Attempt ${ATTEMPT}/${MAX_ATTEMPTS}"
+        echo "----------------------------------------"
+
+        if aws s3 cp \
+            "${STATE_S3_PATH}" \
+            "${STATE_MANIFEST}"
+        then
+
+            echo "Previous manifest downloaded successfully."
+
+            DOWNLOAD_SUCCESS="true"
+            break
+
+        else
+
+            echo "WARNING: Failed to download previous manifest."
+
+            if [ "${ATTEMPT}" -lt "${MAX_ATTEMPTS}" ]; then
+                echo "Retrying in 10 seconds..."
+                sleep 10
+            fi
+
+        fi
+
+        ATTEMPT=$((ATTEMPT + 1))
+
+    done
+
+    # --------------------------------------------------------
+    # 4.2 Verify download succeeded
+    # --------------------------------------------------------
+
+    if [ "${DOWNLOAD_SUCCESS}" != "true" ]; then
+
+        echo "========================================"
+        echo "ERROR: Previous manifest download failed"
+        echo "========================================"
+
+        echo "Manifest exists in S3, but it could not"
+        echo "be downloaded after ${MAX_ATTEMPTS} attempts."
+
+        echo "S3 path:"
+        echo "${STATE_S3_PATH}"
+
+        echo "Stopping dbt deployment."
+        echo "The existing S3 manifest will NOT be modified."
+
+        exit 1
+    fi
 
     echo "Previous manifest downloaded:"
     ls -lh "${STATE_MANIFEST}"
