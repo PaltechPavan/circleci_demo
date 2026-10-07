@@ -1,1 +1,0 @@
-{"_invocation_id": "c77264b1-2c27-44f0-bd5f-54c55997574c", "linked": {"0": {"name": "model.dbt_demo.identifier", "type": "model"}, "1": {"name": "model.dbt_demo.observation_test", "type": "model"}, "2": {"name": "model.dbt_demo.patient", "type": "model"}}}
