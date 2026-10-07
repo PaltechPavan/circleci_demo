@@ -1,84 +1,101 @@
+# ============================================================
+# QA DBT Docker Image
+# ============================================================
+
 FROM python:3.11-slim
+
+# ------------------------------------------------------------
+# Environment
+# ------------------------------------------------------------
+
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV DBT_PROFILES_DIR=/app
 
 WORKDIR /app
 
-
-# ============================================================
-# 1. Install system dependencies
-# ============================================================
+# ------------------------------------------------------------
+# System dependencies
+# ------------------------------------------------------------
 
 RUN apt-get update && \
-    apt-get install -y \
+    apt-get install -y --no-install-recommends \
         git \
         curl \
         unzip \
-    && rm -rf /var/lib/apt/lists/*
+        ca-certificates \
+        jq && \
+    rm -rf /var/lib/apt/lists/*
 
+# ------------------------------------------------------------
+# AWS CLI v2
+# ------------------------------------------------------------
 
-# ============================================================
-# 2. Install AWS CLI v2
-# ============================================================
-
-RUN curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" \
-        -o "/tmp/awscliv2.zip" && \
-    unzip /tmp/awscliv2.zip -d /tmp && \
+RUN curl -fsSL \
+        "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" \
+        -o /tmp/awscliv2.zip && \
+    unzip -q /tmp/awscliv2.zip -d /tmp && \
     /tmp/aws/install && \
     rm -rf /tmp/aws /tmp/awscliv2.zip
 
-
-# ============================================================
-# 3. Install Python / dbt dependencies
-# ============================================================
+# ------------------------------------------------------------
+# Python dependencies
+# ------------------------------------------------------------
 
 COPY requirements.txt .
 
 RUN pip install --no-cache-dir -r requirements.txt
 
-
-# ============================================================
-# 4. Verify installations
-# ============================================================
-
-RUN python --version
-RUN dbt --version
-RUN aws --version
-
-
-# ============================================================
-# 5. Copy dbt project
-# ============================================================
+# ------------------------------------------------------------
+# Copy dbt project
+# ------------------------------------------------------------
 
 COPY . .
 
-
-# ============================================================
-# 6. Copy single-file dbt docs generator
-# ============================================================
+# ------------------------------------------------------------
+# Copy single-file dbt docs generator
+# ------------------------------------------------------------
 
 COPY create_single_dbt_docs.py /app/create_single_dbt_docs.py
 
+# ------------------------------------------------------------
+# Create entrypoint
+# ------------------------------------------------------------
+
+RUN cat <<'EOF' > /app/entrypoint.sh
+#!/bin/bash
+
+set -euo pipefail
+
+echo "=========================================="
+echo "QA DBT ECS TASK"
+echo "=========================================="
 
 # ============================================================
-# 7. Create entrypoint script
+# Environment variables
 # ============================================================
 
-RUN cat > /app/entrypoint.sh <<'EOF'
-#!/bin/sh
+ENVIRONMENT="${ENVIRONMENT:-}"
+DBT_STATE_BUCKET="${DBT_STATE_BUCKET:-}"
+DBT_RUN_MODE="${DBT_RUN_MODE:-STATE_AWARE}"
 
-set -e
+# New QA docs bucket
+DBT_DOCS_BUCKET="${DBT_DOCS_BUCKET:-}"
 
+echo "Environment:"
+echo "${ENVIRONMENT}"
 
-echo "========================================"
-echo "Starting dbt container"
-echo "========================================"
+echo "DBT State Bucket:"
+echo "${DBT_STATE_BUCKET}"
 
-echo "Environment : ${ENVIRONMENT}"
-echo "Run Mode    : ${DBT_RUN_MODE}"
-echo "State Bucket: ${DBT_STATE_BUCKET}"
+echo "DBT Run Mode:"
+echo "${DBT_RUN_MODE}"
 
+echo "DBT Docs Bucket:"
+echo "${DBT_DOCS_BUCKET}"
 
 # ============================================================
-# 1. Basic configuration
+# Validate required variables
 # ============================================================
 
 if [ -z "${ENVIRONMENT}" ]; then
@@ -86,421 +103,278 @@ if [ -z "${ENVIRONMENT}" ]; then
     exit 1
 fi
 
-
 if [ -z "${DBT_STATE_BUCKET}" ]; then
     echo "ERROR: DBT_STATE_BUCKET is not set"
     exit 1
 fi
 
-
-if [ -z "${DBT_RUN_MODE}" ]; then
-    echo "ERROR: DBT_RUN_MODE is not set"
-    echo "Expected values: STATE_AWARE or FULL"
+if [ -z "${DBT_DOCS_BUCKET}" ]; then
+    echo "ERROR: DBT_DOCS_BUCKET is not set"
     exit 1
 fi
-
 
 if [ "${DBT_RUN_MODE}" != "STATE_AWARE" ] && \
    [ "${DBT_RUN_MODE}" != "FULL" ]; then
 
-    echo "ERROR: Invalid DBT_RUN_MODE: ${DBT_RUN_MODE}"
-    echo "Expected values: STATE_AWARE or FULL"
+    echo "ERROR: DBT_RUN_MODE must be STATE_AWARE or FULL"
     exit 1
 fi
 
-
 # ============================================================
-# 2. State configuration
-# ============================================================
-
-STATE_KEY="${ENVIRONMENT}/manifest.json"
-
-STATE_S3_PATH="s3://${DBT_STATE_BUCKET}/${STATE_KEY}"
-
-STATE_DIR="/tmp/dbt-state"
-
-STATE_MANIFEST="${STATE_DIR}/manifest.json"
-
-mkdir -p "${STATE_DIR}"
-
-
-echo "========================================"
-echo "dbt Configuration"
-echo "========================================"
-
-echo "Environment     : ${ENVIRONMENT}"
-echo "Run Mode        : ${DBT_RUN_MODE}"
-echo "State S3 path   : ${STATE_S3_PATH}"
-echo "State directory : ${STATE_DIR}"
-
-
-# ============================================================
-# 3. Install dbt packages
+# Paths
 # ============================================================
 
-echo "========================================"
+STATE_PATH="s3://${DBT_STATE_BUCKET}/${ENVIRONMENT}/manifest.json"
+
+LOCAL_STATE_DIR="/tmp/dbt-state"
+LOCAL_STATE_MANIFEST="${LOCAL_STATE_DIR}/manifest.json"
+
+DOCS_DIR="/app/target"
+SINGLE_DOCS_DIR="/app/target/single"
+SINGLE_INDEX="${SINGLE_DOCS_DIR}/index.html"
+
+# ============================================================
+# Create directories
+# ============================================================
+
+mkdir -p "${LOCAL_STATE_DIR}"
+mkdir -p "${SINGLE_DOCS_DIR}"
+
+# ============================================================
+# Show versions
+# ============================================================
+
+echo "=========================================="
+echo "Versions"
+echo "=========================================="
+
+python --version
+dbt --version
+aws --version
+
+# ============================================================
+# AWS identity
+# ============================================================
+
+echo "=========================================="
+echo "AWS Identity"
+echo "=========================================="
+
+aws sts get-caller-identity
+
+# ============================================================
+# dbt deps
+# ============================================================
+
+echo "=========================================="
 echo "Running dbt deps"
-echo "========================================"
+echo "=========================================="
 
 dbt deps
 
-
 # ============================================================
-# 4. dbt debug
+# dbt debug
 # ============================================================
 
-echo "========================================"
+echo "=========================================="
 echo "Running dbt debug"
-echo "========================================"
+echo "=========================================="
 
 dbt debug
 
-
 # ============================================================
-# 5. STATE-AWARE OR FULL EXECUTION
+# STATE AWARE MODE
 # ============================================================
 
 if [ "${DBT_RUN_MODE}" = "STATE_AWARE" ]; then
 
-    # ========================================================
-    # STATE-AWARE MODE
-    # ========================================================
+    echo "=========================================="
+    echo "STATE AWARE MODE"
+    echo "=========================================="
 
-    echo "========================================"
-    echo "STATE-AWARE MODE"
-    echo "========================================"
-
-    echo "Checking previous dbt state..."
-
+    echo "Checking previous manifest:"
+    echo "${STATE_PATH}"
 
     if aws s3api head-object \
         --bucket "${DBT_STATE_BUCKET}" \
-        --key "${STATE_KEY}" \
-        >/dev/null 2>&1
-    then
+        --key "${ENVIRONMENT}/manifest.json" \
+        >/dev/null 2>&1; then
 
-        echo "Previous state FOUND"
+        echo "Previous manifest found."
 
-        echo "Previous manifest:"
-        echo "${STATE_S3_PATH}"
+        echo "Downloading previous manifest..."
 
+        aws s3 cp \
+            "${STATE_PATH}" \
+            "${LOCAL_STATE_MANIFEST}"
 
-        # ----------------------------------------------------
-        # Download previous manifest
-        # ----------------------------------------------------
+        echo "Previous manifest downloaded."
 
-        MAX_ATTEMPTS=3
-
-        ATTEMPT=1
-
-        DOWNLOAD_SUCCESS="false"
-
-
-        while [ "${ATTEMPT}" -le "${MAX_ATTEMPTS}" ]; do
-
-            echo "----------------------------------------"
-            echo "Downloading previous manifest"
-            echo "Attempt ${ATTEMPT}/${MAX_ATTEMPTS}"
-            echo "----------------------------------------"
-
-
-            if aws s3 cp \
-                "${STATE_S3_PATH}" \
-                "${STATE_MANIFEST}"
-            then
-
-                echo "Previous manifest downloaded successfully."
-
-                DOWNLOAD_SUCCESS="true"
-
-                break
-
-            else
-
-                echo "WARNING: Failed to download previous manifest."
-
-
-                if [ "${ATTEMPT}" -lt "${MAX_ATTEMPTS}" ]; then
-
-                    echo "Retrying in 10 seconds..."
-
-                    sleep 10
-
-                fi
-
-            fi
-
-
-            ATTEMPT=$((ATTEMPT + 1))
-
-        done
-
+        ls -lh "${LOCAL_STATE_MANIFEST}"
 
         # ----------------------------------------------------
-        # Verify manifest download
+        # Parse current project
         # ----------------------------------------------------
 
-        if [ "${DOWNLOAD_SUCCESS}" != "true" ]; then
+        echo "=========================================="
+        echo "Running dbt parse"
+        echo "=========================================="
 
-            echo "========================================"
-            echo "ERROR: Previous manifest download failed"
-            echo "========================================"
+        dbt parse
 
-            echo "Manifest exists in S3, but it could not"
-            echo "be downloaded after ${MAX_ATTEMPTS} attempts."
+        # ----------------------------------------------------
+        # Incremental/state-aware build
+        # ----------------------------------------------------
 
-            echo "S3 path:"
-            echo "${STATE_S3_PATH}"
-
-            echo "Stopping state-aware execution."
-
-            exit 1
-
-        fi
-
-
-        echo "Previous manifest downloaded:"
-
-        ls -lh "${STATE_MANIFEST}"
-
-        HAS_PREVIOUS_STATE="true"
-
-
-    else
-
-        echo "No previous state found."
-
-        echo "Running FULL dbt build for first deployment."
-
-        HAS_PREVIOUS_STATE="false"
-
-    fi
-
-
-    # --------------------------------------------------------
-    # Generate current dbt manifest
-    # --------------------------------------------------------
-
-    echo "========================================"
-    echo "Generating current dbt manifest"
-    echo "========================================"
-
-    dbt parse
-
-    echo "Current manifest:"
-
-    ls -lh target/manifest.json
-
-
-    # --------------------------------------------------------
-    # Run dbt
-    # --------------------------------------------------------
-
-    if [ "${HAS_PREVIOUS_STATE}" = "true" ]; then
-
-        echo "========================================"
-        echo "Running STATE-AWARE dbt build"
-        echo "========================================"
-
-        echo "Selection:"
-        echo "state:modified+"
+        echo "=========================================="
+        echo "Running state-aware dbt build"
+        echo "=========================================="
 
         dbt build \
             --select state:modified+ \
-            --state "${STATE_DIR}"
+            --state "${LOCAL_STATE_DIR}"
 
     else
 
-        echo "========================================"
-        echo "Running FULL dbt build"
-        echo "========================================"
+        echo "No previous manifest found."
+
+        echo "Running full dbt build."
+
+        dbt parse
 
         dbt build
 
     fi
 
+# ============================================================
+# FULL MODE
+# ============================================================
 
 else
 
-    # ========================================================
-    # FULL MODE
-    # ========================================================
-
-    echo "========================================"
+    echo "=========================================="
     echo "FULL MODE"
-    echo "========================================"
-
-    echo "Daily PROD execution."
-
-    echo "Previous manifest will NOT be downloaded."
-
-    echo "State comparison will NOT be performed."
-
-
-    # --------------------------------------------------------
-    # Generate current dbt manifest
-    # --------------------------------------------------------
-
-    echo "========================================"
-    echo "Generating current dbt manifest"
-    echo "========================================"
+    echo "=========================================="
 
     dbt parse
-
-    echo "Current manifest:"
-
-    ls -lh target/manifest.json
-
-
-    # --------------------------------------------------------
-    # Run full dbt build
-    # --------------------------------------------------------
-
-    echo "========================================"
-    echo "Running FULL dbt build"
-    echo "========================================"
-
-    echo "Selection:"
-    echo "ALL enabled dbt models"
 
     dbt build
 
 fi
 
-
 # ============================================================
-# 6. dbt build succeeded
-# ============================================================
-
-echo "========================================"
-echo "dbt build SUCCESS"
-echo "========================================"
-
-echo "Current manifest:"
-
-ls -lh target/manifest.json
-
-
-# ============================================================
-# 7. Generate dbt documentation
+# DBT BUILD SUCCESS
 # ============================================================
 
-echo "========================================"
-echo "Generating dbt documentation"
-echo "========================================"
+echo "=========================================="
+echo "DBT BUILD COMPLETED"
+echo "=========================================="
+
+# ============================================================
+# Generate dbt docs
+# ============================================================
+
+echo "=========================================="
+echo "Generating dbt docs"
+echo "=========================================="
 
 dbt docs generate
 
+echo "dbt docs generated successfully."
 
-echo "========================================"
-echo "dbt documentation generated"
-echo "========================================"
+echo "=========================================="
+echo "Generated target files"
+echo "=========================================="
 
-
-echo "Generated documentation files:"
-
-find target -maxdepth 3 -type f | sort
-
+find /app/target -maxdepth 2 -type f -print
 
 # ============================================================
-# 8. Create single-file index.html
+# Create single-file dbt documentation
 # ============================================================
 
-echo "========================================"
-echo "Creating single-file dbt documentation"
-echo "========================================"
-
+echo "=========================================="
+echo "Creating single-file dbt docs"
+echo "=========================================="
 
 python /app/create_single_dbt_docs.py \
     --target-dir /app/target \
-    --output-file /app/target/single/index.html
+    --output-file "${SINGLE_INDEX}"
 
+# ============================================================
+# Verify single HTML
+# ============================================================
 
-echo "========================================"
-echo "Single-file dbt documentation created"
-echo "========================================"
+if [ ! -f "${SINGLE_INDEX}" ]; then
 
-
-if [ ! -f "/app/target/single/index.html" ]; then
-
-    echo "ERROR: Single-file index.html was not created."
+    echo "ERROR: Single dbt docs file was not created."
 
     exit 1
 
 fi
 
+echo "Single dbt docs created successfully."
 
-echo "Single-file documentation:"
+ls -lh "${SINGLE_INDEX}"
 
-ls -lh /app/target/single/index.html
+FILE_SIZE=$(stat -c%s "${SINGLE_INDEX}")
 
+echo "Single dbt docs size:"
+echo "${FILE_SIZE} bytes"
 
 # ============================================================
-# 9. Upload successful manifest
+# Upload manifest for future state-aware runs
 # ============================================================
 
-echo "========================================"
-echo "Updating dbt state in S3"
-echo "========================================"
-
-echo "Uploading:"
-echo "target/manifest.json"
-
-echo "To:"
-echo "${STATE_S3_PATH}"
-
+echo "=========================================="
+echo "Uploading dbt state manifest"
+echo "=========================================="
 
 aws s3 cp \
-    target/manifest.json \
-    "${STATE_S3_PATH}"
+    "/app/target/manifest.json" \
+    "${STATE_PATH}"
 
-
-echo "========================================"
-echo "DBT STATE UPDATED SUCCESSFULLY"
-echo "========================================"
-
+echo "Manifest uploaded successfully."
 
 # ============================================================
-# 10. QA ONLY - Do NOT upload docs to S3 yet
+# Upload single dbt docs to QA S3
 # ============================================================
 
-echo "========================================"
-echo "QA DOCUMENTATION TEST"
-echo "========================================"
+echo "=========================================="
+echo "Uploading QA dbt docs to S3"
+echo "=========================================="
 
-echo "Single-file dbt documentation exists at:"
+QA_DOCS_KEY="qa/index.html"
 
-echo "/app/target/single/index.html"
+echo "Bucket:"
+echo "${DBT_DOCS_BUCKET}"
 
+echo "Object:"
+echo "${QA_DOCS_KEY}"
 
-echo "File size:"
+aws s3 cp \
+    "${SINGLE_INDEX}" \
+    "s3://${DBT_DOCS_BUCKET}/${QA_DOCS_KEY}" \
+    --content-type "text/html" \
+    --cache-control "no-cache"
 
-ls -lh /app/target/single/index.html
+echo "=========================================="
+echo "QA DBT DOCS UPLOAD COMPLETED"
+echo "=========================================="
 
+echo "S3 object:"
+echo "s3://${DBT_DOCS_BUCKET}/${QA_DOCS_KEY}"
 
-echo "========================================"
+echo "=========================================="
 echo "DBT EXECUTION COMPLETED SUCCESSFULLY"
-echo "========================================"
+echo "=========================================="
 
+exit 0
 EOF
-
-
-# ============================================================
-# 8. Make entrypoint executable
-# ============================================================
 
 RUN chmod +x /app/entrypoint.sh
 
-
-# ============================================================
-# 9. dbt configuration
-# ============================================================
-
-ENV DBT_PROFILES_DIR=/app
-
-
-# ============================================================
-# 10. Container startup
-# ============================================================
+# ------------------------------------------------------------
+# Entrypoint
+# ------------------------------------------------------------
 
 ENTRYPOINT ["/app/entrypoint.sh"]
