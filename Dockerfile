@@ -366,4 +366,3 @@ ENV DBT_PROFILES_DIR=/app
 # ============================================================
 
 ENTRYPOINT ["/app/entrypoint.sh"]
-```
