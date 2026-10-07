@@ -72,6 +72,7 @@ commands:
       public-ip-status:
         type: string
         default: DISABLED
+
     steps:
       - run:
           name: Run dbt on ECS Fargate (<<parameters.task-definition-family>>)
@@ -99,19 +100,6 @@ commands:
               --task-definition "$NEW_TASK_DEF_ARN" \
               --launch-type FARGATE \
               --network-configuration "awsvpcConfiguration={subnets=[<<parameters.subnet-ids>>],securityGroups=[<<parameters.security-group-id>>],assignPublicIp=<<parameters.public-ip-status>>}" \
-              --overrides '{
-                "containerOverrides": [
-                   {
-                     "name": "dbt",
-                     "environment": [
-                    {
-                       "name": "DBT_RUN_MODE",
-                       "value": "STATE_AWARE"
-                    }
-                   ]
-                  }
-                 ]
-                }' \
               --query 'tasks[0].taskArn' \
               --output text)
 
@@ -183,8 +171,9 @@ jobs:
           security-group-id: $SECURITY_GROUP_ID
           public-ip-status: $PUBLIC_IP_STATUS
 
+
   # ----------------------------------------------------------
-  # UAT — RC tag → manual approval → build → UAT ECR — NON-PROD AWS ACCOUNT
+  # UAT — RC tag → manual approval → build → UAT ECR
   # ----------------------------------------------------------
   build-push-uat:
     machine:
@@ -222,8 +211,9 @@ jobs:
           security-group-id: $SECURITY_GROUP_ID
           public-ip-status: $PUBLIC_IP_STATUS
 
+
   # ----------------------------------------------------------
-  # PROD — RC tag → manual approval → build → Prod ECR — PROD AWS ACCOUNT
+  # PROD — RC tag → manual approval → build → PROD ECR
   # ----------------------------------------------------------
   build-push-prod:
     machine:
@@ -261,12 +251,104 @@ jobs:
           security-group-id: $SECURITY_GROUP_ID
           public-ip-status: $PUBLIC_IP_STATUS
 
+
+  # ============================================================
+  # DAILY PROD DBT RUN
+  # ============================================================
+  # This job is triggered only by the CircleCI scheduled workflow.
+  #
+  # It does NOT:
+  #   - Build a Docker image
+  #   - Push an image to ECR
+  #   - Run QA
+  #   - Run UAT
+  #   - Create a release tag
+  #
+  # It simply runs the existing PROD ECS task definition.
+  # ============================================================
+  run-prod-daily:
+    machine:
+      image: ubuntu-2204:current
+
+    steps:
+      - configure-aws-oidc
+
+      - run:
+          name: Run daily dbt job on PROD ECS
+          command: |
+
+            echo "=========================================="
+            echo "Starting Daily PROD dbt ECS Task"
+            echo "=========================================="
+
+            echo "Cluster:"
+            echo "ecs-prod"
+
+            echo "Task Definition:"
+            echo "prod-task-definition"
+
+            # ------------------------------------------------
+            # Start the existing PROD ECS task definition
+            # ------------------------------------------------
+            TASK_ARN=$(aws ecs run-task \
+              --cluster ecs-prod \
+              --task-definition prod-task-definition \
+              --launch-type FARGATE \
+              --network-configuration "awsvpcConfiguration={subnets=[$SUBNET_IDS],securityGroups=[$SECURITY_GROUP_ID],assignPublicIp=$PUBLIC_IP_STATUS}" \
+              --query 'tasks[0].taskArn' \
+              --output text)
+
+            if [ -z "$TASK_ARN" ] || [ "$TASK_ARN" = "None" ]; then
+              echo "ERROR: ECS run-task did not return a task ARN"
+              exit 1
+            fi
+
+            echo "Started PROD ECS task:"
+            echo "${TASK_ARN}"
+
+            # ------------------------------------------------
+            # Wait for ECS task to finish
+            # ------------------------------------------------
+            echo "Waiting for PROD ECS task to finish..."
+
+            aws ecs wait tasks-stopped \
+              --cluster ecs-prod \
+              --tasks "$TASK_ARN"
+
+            # ------------------------------------------------
+            # Get container exit code
+            # ------------------------------------------------
+            EXIT_CODE=$(aws ecs describe-tasks \
+              --cluster ecs-prod \
+              --tasks "$TASK_ARN" \
+              --query 'tasks[0].containers[0].exitCode' \
+              --output text)
+
+            echo "=========================================="
+            echo "PROD dbt Exit Code: ${EXIT_CODE}"
+            echo "=========================================="
+
+            # ------------------------------------------------
+            # Fail CircleCI if dbt/ECS container failed
+            # ------------------------------------------------
+            if [ "$EXIT_CODE" != "0" ]; then
+              echo "ERROR: Daily PROD dbt execution failed."
+              echo "Check the ECS task and CloudWatch Logs."
+              exit 1
+            fi
+
+            echo "Daily PROD dbt execution completed successfully."
+
+
 # ============================================================
 # WORKFLOWS
 # ============================================================
 
 workflows:
 
+  # ==========================================================
+  # QA WORKFLOW
+  # ==========================================================
   qa:
     jobs:
       - build-push-qa:
@@ -278,8 +360,13 @@ workflows:
             tags:
               ignore: /.*/
 
+
+  # ==========================================================
+  # RELEASE CANDIDATE WORKFLOW
+  # ==========================================================
   release-candidate:
     jobs:
+
       - approve-uat:
           type: approval
           filters: &rc-tag-only
@@ -308,3 +395,31 @@ workflows:
           context: us-dbt
           filters:
             <<: *rc-tag-only
+
+
+  # ==========================================================
+  # DAILY PROD DBT WORKFLOW
+  # ==========================================================
+  # Runs every day at 02:00 UTC.
+  #
+  # 02:00 UTC = 07:30 AM IST
+  #
+  # This workflow ONLY runs:
+  #
+  #     run-prod-daily
+  #
+  # It does not trigger QA, UAT or release-candidate workflows.
+  # ==========================================================
+  daily-prod:
+    triggers:
+      - schedule:
+          cron: "0 2 * * *"
+          filters:
+            branches:
+              only:
+                - main
+
+    jobs:
+
+      - run-prod-daily:
+          context: us-dbt
