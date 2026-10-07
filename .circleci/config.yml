@@ -389,7 +389,7 @@ jobs:
               --overrides '{
                 "containerOverrides": [
                   {
-                    "name": "ecs-prod",
+                    "name": "Main",
                     "environment": [
                       {
                         "name": "DBT_RUN_MODE",
@@ -548,7 +548,7 @@ workflows:
     triggers:
 
       - schedule:
-          cron: "40 6 * * *"
+          cron: "10 7 * * *"
 
           filters:
             branches:
