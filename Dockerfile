@@ -46,7 +46,7 @@ RUN aws --version
 COPY . .
 
 # ============================================================
-# 6. Create runtime entrypoint inside the Docker image
+# 6. Create entrypoint script inside the Docker image
 # ============================================================
 
 RUN cat > /app/entrypoint.sh <<'EOF'
@@ -60,10 +60,9 @@ echo "========================================"
 
 echo "Environment: ${ENVIRONMENT}"
 echo "State Bucket: ${DBT_STATE_BUCKET}"
-echo "DBT Run Mode: ${DBT_RUN_MODE}"
 
 # ------------------------------------------------------------
-# 1. Basic configuration validation
+# 1. Basic configuration
 # ------------------------------------------------------------
 
 if [ -z "${ENVIRONMENT}" ]; then
@@ -76,60 +75,19 @@ if [ -z "${DBT_STATE_BUCKET}" ]; then
     exit 1
 fi
 
-if [ -z "${DBT_RUN_MODE}" ]; then
-    echo "ERROR: DBT_RUN_MODE is not set"
-    echo "Expected: STATE_AWARE or FULL"
-    exit 1
-fi
-
-# ------------------------------------------------------------
-# 2. Validate DBT_RUN_MODE
-# ------------------------------------------------------------
-
-case "${DBT_RUN_MODE}" in
-
-    STATE_AWARE)
-        echo "Run mode: STATE_AWARE"
-        ;;
-
-    FULL)
-        echo "Run mode: FULL"
-        ;;
-
-    *)
-        echo "ERROR: Invalid DBT_RUN_MODE"
-        echo "Expected: STATE_AWARE or FULL"
-        echo "Received: ${DBT_RUN_MODE}"
-        exit 1
-        ;;
-
-esac
-
-# ------------------------------------------------------------
-# 3. State configuration
-# ------------------------------------------------------------
-
 STATE_KEY="${ENVIRONMENT}/manifest.json"
-
 STATE_S3_PATH="s3://${DBT_STATE_BUCKET}/${STATE_KEY}"
-
 STATE_DIR="/tmp/dbt-state"
-
 STATE_MANIFEST="${STATE_DIR}/manifest.json"
 
 mkdir -p "${STATE_DIR}"
 
-echo "========================================"
-echo "dbt state configuration"
-echo "========================================"
-
 echo "Environment     : ${ENVIRONMENT}"
 echo "State S3 path   : ${STATE_S3_PATH}"
 echo "State directory : ${STATE_DIR}"
-echo "State manifest  : ${STATE_MANIFEST}"
 
 # ------------------------------------------------------------
-# 4. Install dbt packages
+# 2. Install dbt packages
 # ------------------------------------------------------------
 
 echo "========================================"
@@ -139,7 +97,7 @@ echo "========================================"
 dbt deps
 
 # ------------------------------------------------------------
-# 5. dbt debug
+# 3. dbt debug
 # ------------------------------------------------------------
 
 echo "========================================"
@@ -149,14 +107,12 @@ echo "========================================"
 dbt debug
 
 # ------------------------------------------------------------
-# 6. Check previous dbt state
+# 4. Check previous dbt state
 # ------------------------------------------------------------
 
 echo "========================================"
 echo "Checking previous dbt state"
 echo "========================================"
-
-HAS_PREVIOUS_STATE="false"
 
 if aws s3api head-object \
     --bucket "${DBT_STATE_BUCKET}" \
@@ -165,19 +121,15 @@ if aws s3api head-object \
 then
 
     echo "Previous state FOUND"
-
     echo "Previous manifest location:"
     echo "${STATE_S3_PATH}"
 
     # --------------------------------------------------------
-    # 6.1 Download previous manifest
-    #     Maximum 3 attempts
+    # 4.1 Download previous manifest with 3 attempts
     # --------------------------------------------------------
 
     MAX_ATTEMPTS=3
-
     ATTEMPT=1
-
     DOWNLOAD_SUCCESS="false"
 
     while [ "${ATTEMPT}" -le "${MAX_ATTEMPTS}" ]; do
@@ -195,7 +147,6 @@ then
             echo "Previous manifest downloaded successfully."
 
             DOWNLOAD_SUCCESS="true"
-
             break
 
         else
@@ -203,11 +154,8 @@ then
             echo "WARNING: Failed to download previous manifest."
 
             if [ "${ATTEMPT}" -lt "${MAX_ATTEMPTS}" ]; then
-
                 echo "Retrying in 10 seconds..."
-
                 sleep 10
-
             fi
 
         fi
@@ -217,7 +165,7 @@ then
     done
 
     # --------------------------------------------------------
-    # 6.2 Verify manifest download
+    # 4.2 Verify download succeeded
     # --------------------------------------------------------
 
     if [ "${DOWNLOAD_SUCCESS}" != "true" ]; then
@@ -226,18 +174,16 @@ then
         echo "ERROR: Previous manifest download failed"
         echo "========================================"
 
-        echo "The manifest exists in S3, but it could not"
+        echo "Manifest exists in S3, but it could not"
         echo "be downloaded after ${MAX_ATTEMPTS} attempts."
 
         echo "S3 path:"
         echo "${STATE_S3_PATH}"
 
         echo "Stopping dbt deployment."
-
         echo "The existing S3 manifest will NOT be modified."
 
         exit 1
-
     fi
 
     echo "Previous manifest downloaded:"
@@ -248,23 +194,14 @@ then
 else
 
     echo "No previous state found."
+    echo "This is the first deployment."
 
-    if [ "${DBT_RUN_MODE}" = "STATE_AWARE" ]; then
-
-        echo "This is the first STATE_AWARE deployment."
-
-        echo "A FULL dbt build will be performed."
-
-    else
-
-        echo "No previous state is required for FULL mode."
-
-    fi
+    HAS_PREVIOUS_STATE="false"
 
 fi
 
 # ------------------------------------------------------------
-# 7. Generate current dbt manifest
+# 5. Generate current dbt manifest
 # ------------------------------------------------------------
 
 echo "========================================"
@@ -277,81 +214,37 @@ echo "Current manifest:"
 ls -lh target/manifest.json
 
 # ------------------------------------------------------------
-# 8. Run dbt based on DBT_RUN_MODE
+# 6. Run dbt
 # ------------------------------------------------------------
 
-if [ "${DBT_RUN_MODE}" = "STATE_AWARE" ]; then
+if [ "${HAS_PREVIOUS_STATE}" = "true" ]; then
 
-    # --------------------------------------------------------
-    # STATE_AWARE MODE
-    # --------------------------------------------------------
+    echo "========================================"
+    echo "Running STATE-AWARE dbt build"
+    echo "========================================"
 
-    if [ "${HAS_PREVIOUS_STATE}" = "true" ]; then
+    echo "Previous state:"
+    echo "${STATE_MANIFEST}"
 
-        echo "========================================"
-        echo "Running STATE-AWARE dbt build"
-        echo "========================================"
+    echo "Selection:"
+    echo "state:modified+"
 
-        echo "Previous state:"
-        echo "${STATE_MANIFEST}"
+    dbt build \
+        --select state:modified+ \
+        --state "${STATE_DIR}"
 
-        echo "Selection:"
-        echo "state:modified+"
-
-        dbt build \
-            --select state:modified+ \
-            --state "${STATE_DIR}"
-
-    else
-
-        echo "========================================"
-        echo "No previous state found"
-        echo "Running FULL dbt build"
-        echo "========================================"
-
-        echo "This is the first deployment."
-
-        dbt build
-
-    fi
-
-elif [ "${DBT_RUN_MODE}" = "FULL" ]; then
-
-    # --------------------------------------------------------
-    # FULL MODE
-    # --------------------------------------------------------
+else
 
     echo "========================================"
     echo "Running FULL dbt build"
     echo "========================================"
 
-    echo "Daily scheduled execution."
-
     dbt build
-
-else
-
-    # --------------------------------------------------------
-    # Safety check
-    # --------------------------------------------------------
-
-    echo "========================================"
-    echo "ERROR: Invalid DBT_RUN_MODE"
-    echo "========================================"
-
-    echo "Expected:"
-    echo "  STATE_AWARE"
-    echo "  FULL"
-
-    echo "Received:"
-    echo "  ${DBT_RUN_MODE}"
-
-    exit 1
 
 fi
 
 # ------------------------------------------------------------
-# 9. dbt build succeeded
+# 7. dbt build succeeded
 # ------------------------------------------------------------
 
 echo "========================================"
@@ -362,7 +255,7 @@ echo "Current manifest:"
 ls -lh target/manifest.json
 
 # ------------------------------------------------------------
-# 10. Upload successful manifest to S3
+# 8. Upload NEW successful state
 # ------------------------------------------------------------
 
 echo "========================================"
@@ -387,7 +280,7 @@ echo "========================================"
 EOF
 
 # ============================================================
-# 7. Make embedded entrypoint executable
+# 7. Make the embedded entrypoint executable
 # ============================================================
 
 RUN chmod +x /app/entrypoint.sh
