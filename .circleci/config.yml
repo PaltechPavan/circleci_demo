@@ -548,7 +548,7 @@ workflows:
     triggers:
 
       - schedule:
-          cron: "0 2 * * *"
+          cron: "40 6 * * *"
 
           filters:
             branches:
