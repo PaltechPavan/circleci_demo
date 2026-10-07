@@ -413,7 +413,7 @@ workflows:
   daily-prod:
     triggers:
       - schedule:
-          cron: "0 2 * * *"
+          cron: "30 5 * * *"
           filters:
             branches:
               only:
