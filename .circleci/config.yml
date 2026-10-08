@@ -1,13 +1,8 @@
 version: 2.1
 
-# ============================================================
-# ORBS
-# ============================================================
-
 orbs:
   python: circleci/python@3.1.0
   aws-cli: circleci/aws-cli@5.2.0
-
 
 # ============================================================
 # REUSABLE COMMANDS
@@ -15,97 +10,66 @@ orbs:
 
 commands:
 
-  # ----------------------------------------------------------
-  # Install dependencies
-  # ----------------------------------------------------------
-
   install-dependencies:
+    description: Install Python and dbt dependencies with Poetry
     steps:
+      - checkout
 
       - run:
-          name: Install Dependencies
+          name: Configure Poetry
           command: |
-            echo "=========================================="
-            echo "Installing dependencies"
-            echo "=========================================="
+            poetry config virtualenvs.in-project true
 
-            python --version
-            pip --version
-
-            pip install --upgrade pip
-
-            if [ -f requirements.txt ]; then
-              pip install -r requirements.txt
-            fi
-
-            echo "Dependencies installed successfully."
-
-
-  # ----------------------------------------------------------
-  # Configure AWS OIDC
-  # ----------------------------------------------------------
+      - python/install-packages:
+          pkg-manager: poetry
+          args: --with dev
 
   configure-aws-oidc:
+    description: Configure AWS credentials using CircleCI OIDC
     steps:
-
       - aws-cli/setup:
-          role_arn: ${AWS_ROLE_ARN}
-          region: ${AWS_REGION}
+          role_arn: $AWS_ROLE_ARN
+          region: $AWS_REGION
 
       - run:
-          name: Verify AWS Identity
+          name: Verify AWS identity
           command: |
-            echo "=========================================="
-            echo "AWS Identity"
-            echo "=========================================="
-
             aws sts get-caller-identity
 
-
-  # ----------------------------------------------------------
-  # Login to ECR
-  # ----------------------------------------------------------
-
   login-to-ecr:
+    description: Login to Amazon ECR
     steps:
-
       - run:
-          name: Login to Amazon ECR
+          name: Login to ECR
           command: |
-            echo "=========================================="
-            echo "Logging in to Amazon ECR"
-            echo "=========================================="
-
             aws ecr get-login-password \
-              --region "${AWS_REGION}" \
-              | docker login \
-                  --username AWS \
-                  --password-stdin \
-                  "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+              --region "$AWS_REGION" |
+              docker login \
+                --username AWS \
+                --password-stdin \
+                "$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com"
 
-            echo "ECR login successful."
-
-
-  # ----------------------------------------------------------
-  # Run ECS Task
-  # ----------------------------------------------------------
+  # ==========================================================
+  # RUN ECS TASK FOR DEPLOYMENT
+  #
+  # ==========================================================
 
   run-ecs-task:
-    parameters:
+    description: >
+      Register a new task-definition revision using the image built
+      by the deployment and run it as a one-off ECS Fargate task.
 
-      cluster-name:
+    parameters:
+      cluster:
         type: string
 
       task-definition-family:
         type: string
 
-      ecr-repository:
+      ecr-repository-env-var:
         type: string
 
       image-tag:
-        type: string
-
-      dbt-run-mode:
         type: string
 
       subnet-ids:
@@ -114,211 +78,114 @@ commands:
       security-group-id:
         type: string
 
+      public-ip-status:
+        type: string
+        default: DISABLED
+
+      dbt-run-mode:
+        type: string
+        default: STATE_AWARE
+
     steps:
 
-      # ------------------------------------------------------
-      # Get existing task definition
-      # ------------------------------------------------------
-
       - run:
-          name: Get ECS Task Definition
+          name: Run dbt on ECS Fargate (<<parameters.task-definition-family>>)
           command: |
+
+            IMAGE_URI="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${<<parameters.ecr-repository-env-var>>}:<<parameters.image-tag>>"
+
             echo "=========================================="
-            echo "Getting ECS Task Definition"
+            echo "ECS Deployment Task"
             echo "=========================================="
 
             echo "Cluster:"
-            echo "<< parameters.cluster-name >>"
+            echo "<<parameters.cluster>>"
 
             echo "Task Definition:"
-            echo "<< parameters.task-definition-family >>"
-
-            aws ecs describe-task-definition \
-              --task-definition "<< parameters.task-definition-family >>" \
-              --query taskDefinition \
-              --output json \
-              > /tmp/task-definition.json
-
-            echo "Task definition retrieved successfully."
-
-      # ------------------------------------------------------
-      # Prepare new task definition
-      # ------------------------------------------------------
-
-      - run:
-          name: Prepare ECS Task Definition
-          command: |
-            echo "=========================================="
-            echo "Preparing ECS Task Definition"
-            echo "=========================================="
-
-            IMAGE_URI="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/<< parameters.ecr-repository >>:<< parameters.image-tag >>"
+            echo "<<parameters.task-definition-family>>"
 
             echo "Image:"
             echo "${IMAGE_URI}"
 
-            echo "DBT Run Mode:"
-            echo "<< parameters.dbt-run-mode >>"
+            echo "DBT_RUN_MODE:"
+            echo "<<parameters.dbt-run-mode>>"
 
-            jq \
-              --arg IMAGE "${IMAGE_URI}" \
-              --arg DBT_RUN_MODE "<< parameters.dbt-run-mode >>" \
-              '
-              .containerDefinitions[0].image = $IMAGE
-              |
-              .containerDefinitions[0].environment =
-                (
-                  .containerDefinitions[0].environment
-                  | map(
-                      if .name == "DBT_RUN_MODE"
-                      then .value = $DBT_RUN_MODE
-                      else .
-                      end
-                    )
-                )
-              |
-              del(
-                .taskDefinitionArn,
-                .revision,
-                .status,
-                .requiresAttributes,
-                .compatibilities,
-                .registeredAt,
-                .registeredBy
-              )
-              ' \
-              /tmp/task-definition.json \
-              > /tmp/new-task-definition.json
+            # ------------------------------------------------
+            # Get existing task definition
+            # ------------------------------------------------
 
-            echo "Prepared task definition."
+            NEW_TASK_DEF_JSON=$(aws ecs describe-task-definition \
+              --task-definition "<<parameters.task-definition-family>>" \
+              --query 'taskDefinition' | \
+              jq --arg IMAGE "$IMAGE_URI" \
+                 --arg RUN_MODE "<<parameters.dbt-run-mode>>" \
+                '.containerDefinitions[0].image = $IMAGE
+                 | .containerDefinitions[0].environment =
+                   ((.containerDefinitions[0].environment // [])
+                    | map(select(.name != "DBT_RUN_MODE"))
+                    + [{"name":"DBT_RUN_MODE","value":$RUN_MODE}])
+                 | del(.taskDefinitionArn, .revision, .status, .requiresAttributes,
+                       .compatibilities, .registeredAt, .registeredBy)')
 
-      # ------------------------------------------------------
-      # Register new task definition revision
-      # ------------------------------------------------------
-
-      - run:
-          name: Register ECS Task Definition
-          command: |
-            echo "=========================================="
-            echo "Registering ECS Task Definition"
-            echo "=========================================="
+            # ------------------------------------------------
+            # Register new task definition revision
+            # ------------------------------------------------
 
             NEW_TASK_DEF_ARN=$(aws ecs register-task-definition \
-              --cli-input-json file:///tmp/new-task-definition.json \
+              --cli-input-json "$NEW_TASK_DEF_JSON" \
               --query 'taskDefinition.taskDefinitionArn' \
               --output text)
 
-            echo "Registered Task Definition:"
+            echo "Registered task definition:"
             echo "${NEW_TASK_DEF_ARN}"
 
-            echo "${NEW_TASK_DEF_ARN}" > /tmp/new-task-definition-arn
-
-      # ------------------------------------------------------
-      # Run ECS Fargate Task
-      # ------------------------------------------------------
-
-      - run:
-          name: Run ECS Fargate Task
-          command: |
-            echo "=========================================="
-            echo "Running ECS Fargate Task"
-            echo "=========================================="
-
-            TASK_DEF_ARN=$(cat /tmp/new-task-definition-arn)
-
-            echo "Cluster:"
-            echo "<< parameters.cluster-name >>"
-
-            echo "Task Definition:"
-            echo "${TASK_DEF_ARN}"
-
-            echo "Subnet IDs:"
-            echo "<< parameters.subnet-ids >>"
-
-            echo "Security Group:"
-            echo "<< parameters.security-group-id >>"
+            # ------------------------------------------------
+            # Run ECS task
+            # ------------------------------------------------
 
             TASK_ARN=$(aws ecs run-task \
-              --cluster "<< parameters.cluster-name >>" \
-              --task-definition "${TASK_DEF_ARN}" \
+              --cluster "<<parameters.cluster>>" \
+              --task-definition "$NEW_TASK_DEF_ARN" \
               --launch-type FARGATE \
-              --network-configuration \
-                "awsvpcConfiguration={
-                  subnets=[<< parameters.subnet-ids >>],
-                  securityGroups=[<< parameters.security-group-id >>],
-                  assignPublicIp=ENABLED
-                }" \
+              --network-configuration "awsvpcConfiguration={subnets=[<<parameters.subnet-ids>>],securityGroups=[<<parameters.security-group-id>>],assignPublicIp=<<parameters.public-ip-status>>}" \
               --query 'tasks[0].taskArn' \
               --output text)
 
-            echo "Started ECS Task:"
+            if [ -z "$TASK_ARN" ] || [ "$TASK_ARN" = "None" ]; then
+              echo "ERROR: ecs run-task did not return a task ARN"
+              exit 1
+            fi
+
+            echo "Started ECS task:"
             echo "${TASK_ARN}"
 
-            echo "${TASK_ARN}" > /tmp/ecs-task-arn
-
-      # ------------------------------------------------------
-      # Wait for ECS Task
-      # ------------------------------------------------------
-
-      - run:
-          name: Wait for ECS Task
-          command: |
-            echo "=========================================="
-            echo "Waiting for ECS Task"
-            echo "=========================================="
-
-            TASK_ARN=$(cat /tmp/ecs-task-arn)
+            # ------------------------------------------------
+            # Wait for task completion
+            # ------------------------------------------------
 
             aws ecs wait tasks-stopped \
-              --cluster "<< parameters.cluster-name >>" \
-              --tasks "${TASK_ARN}"
+              --cluster "<<parameters.cluster>>" \
+              --tasks "$TASK_ARN"
 
-            echo "ECS task stopped."
-
-      # ------------------------------------------------------
-      # Check ECS Exit Code
-      # ------------------------------------------------------
-
-      - run:
-          name: Check ECS Task Result
-          command: |
-            echo "=========================================="
-            echo "Checking ECS Task Result"
-            echo "=========================================="
-
-            TASK_ARN=$(cat /tmp/ecs-task-arn)
+            # ------------------------------------------------
+            # Get dbt container exit code
+            # ------------------------------------------------
 
             EXIT_CODE=$(aws ecs describe-tasks \
-              --cluster "<< parameters.cluster-name >>" \
-              --tasks "${TASK_ARN}" \
+              --cluster "<<parameters.cluster>>" \
+              --tasks "$TASK_ARN" \
               --query 'tasks[0].containers[0].exitCode' \
               --output text)
 
-            STOPPED_REASON=$(aws ecs describe-tasks \
-              --cluster "<< parameters.cluster-name >>" \
-              --tasks "${TASK_ARN}" \
-              --query 'tasks[0].stoppedReason' \
-              --output text)
+            echo "dbt task exit code: ${EXIT_CODE}"
 
-            echo "Exit Code:"
-            echo "${EXIT_CODE}"
-
-            echo "Stopped Reason:"
-            echo "${STOPPED_REASON}"
-
-            if [ "${EXIT_CODE}" != "0" ]; then
-
-              echo "=========================================="
-              echo "ECS TASK FAILED"
-              echo "=========================================="
-
+            if [ "$EXIT_CODE" != "0" ]; then
+              echo "dbt run failed."
+              echo "Check CloudWatch Logs for this ECS task."
               exit 1
-
             fi
 
-            echo "=========================================="
-            echo "ECS TASK COMPLETED SUCCESSFULLY"
-            echo "=========================================="
+            echo "ECS dbt task completed successfully."
 
 
 # ============================================================
@@ -329,280 +196,168 @@ jobs:
 
   # ==========================================================
   # QA
+  # main → build image → QA ECR → QA ECS
+  # STATE_AWARE
   # ==========================================================
 
   build-push-qa:
-
     machine:
       image: ubuntu-2204:current
 
     steps:
-
       - checkout
-
-      # ------------------------------------------------------
-      # Install dependencies
-      # ------------------------------------------------------
-
-      - install-dependencies
-
-      # ------------------------------------------------------
-      # Configure AWS
-      # ------------------------------------------------------
 
       - configure-aws-oidc
 
-      # ------------------------------------------------------
-      # Login to ECR
-      # ------------------------------------------------------
-
       - login-to-ecr
 
-      # ------------------------------------------------------
-      # Build QA Docker image
-      # ------------------------------------------------------
-
       - run:
-          name: Build QA Docker Image
+          name: Build and push QA image
           command: |
-            echo "=========================================="
-            echo "Building QA Docker Image"
-            echo "=========================================="
 
-            IMAGE_URI="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${QA_ECR_REPOSITORY}:${CIRCLE_SHA1}-${CIRCLE_BUILD_NUM}"
-
-            echo "Image:"
-            echo "${IMAGE_URI}"
+            IMAGE_URI="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${QA_ECR_REPOSITORY}"
+            IMAGE_TAG="${CIRCLE_SHA1}-${CIRCLE_BUILD_NUM}"
 
             docker build \
-              -t "${IMAGE_URI}" \
+              --tag "${IMAGE_URI}:${IMAGE_TAG}" \
               .
 
-            echo "QA Docker image built successfully."
+            docker push \
+              "${IMAGE_URI}:${IMAGE_TAG}"
 
-      # ------------------------------------------------------
-      # Push QA image
-      # ------------------------------------------------------
-
-      - run:
-          name: Push QA Docker Image
-          command: |
-            echo "=========================================="
-            echo "Pushing QA Docker Image"
-            echo "=========================================="
-
-            IMAGE_URI="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${QA_ECR_REPOSITORY}:${CIRCLE_SHA1}-${CIRCLE_BUILD_NUM}"
-
-            docker push "${IMAGE_URI}"
-
-            echo "QA Docker image pushed successfully."
-
-      # ------------------------------------------------------
-      # Run QA ECS
-      # ------------------------------------------------------
+            echo "QA image:"
+            echo "${IMAGE_URI}:${IMAGE_TAG}"
 
       - run-ecs-task:
-          cluster-name: ecs-qa
+          cluster: ecs-qa
           task-definition-family: qa-task-defintion
-          ecr-repository: ${QA_ECR_REPOSITORY}
+          ecr-repository-env-var: QA_ECR_REPOSITORY
           image-tag: ${CIRCLE_SHA1}-${CIRCLE_BUILD_NUM}
+          subnet-ids: $SUBNET_IDS
+          security-group-id: $SECURITY_GROUP_ID
+          public-ip-status: $PUBLIC_IP_STATUS
           dbt-run-mode: STATE_AWARE
-          subnet-ids: ${SUBNET_IDS}
-          security-group-id: ${SECURITY_GROUP_ID}
-
-      # ------------------------------------------------------
-      # Verify QA dbt docs
-      # ------------------------------------------------------
-
-      - run:
-          name: Verify QA dbt Docs
-          command: |
-            echo "=========================================="
-            echo "Verifying QA dbt Docs"
-            echo "=========================================="
-
-            aws s3api head-object \
-              --bucket "${QA_DOCS_BUCKET}" \
-              --key "qa/index.html"
-
-            echo "QA dbt docs object exists."
-
-      # ------------------------------------------------------
-      # Generate QA URL
-      # ------------------------------------------------------
-
-      - run:
-          name: Generate QA dbt Docs URL
-          command: |
-            echo "=========================================="
-            echo "Generating QA dbt Docs URL"
-            echo "=========================================="
-
-            echo "https://${QA_DOCS_BUCKET}.s3.${AWS_REGION}.amazonaws.com/qa/index.html"
-
-            echo ""
-            echo "=========================================="
-            echo "QA DBT DOCS URL"
-            echo "=========================================="
 
 
   # ==========================================================
   # UAT
+  # RC tag → approval → build → UAT ECR → UAT ECS
+  # STATE_AWARE
   # ==========================================================
 
   build-push-uat:
-
     machine:
       image: ubuntu-2204:current
 
     steps:
-
       - checkout
-
-      - install-dependencies
 
       - configure-aws-oidc
 
       - login-to-ecr
 
-      # ------------------------------------------------------
-      # Build UAT Docker Image
-      # ------------------------------------------------------
-
       - run:
-          name: Build UAT Docker Image
+          name: Build and push UAT image
           command: |
-            echo "=========================================="
-            echo "Building UAT Docker Image"
-            echo "=========================================="
 
-            IMAGE_URI="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${UAT_ECR_REPOSITORY}:${CIRCLE_TAG}-${CIRCLE_BUILD_NUM}"
+            IMAGE_URI="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${UAT_ECR_REPOSITORY}"
+            IMAGE_TAG="${CIRCLE_TAG}-${CIRCLE_BUILD_NUM}"
+
+            echo "Release: ${CIRCLE_TAG}"
 
             docker build \
-              -t "${IMAGE_URI}" \
+              --tag "${IMAGE_URI}:${IMAGE_TAG}" \
               .
 
-            echo "UAT Docker image built successfully."
+            docker push \
+              "${IMAGE_URI}:${IMAGE_TAG}"
 
-      # ------------------------------------------------------
-      # Push UAT Docker Image
-      # ------------------------------------------------------
-
-      - run:
-          name: Push UAT Docker Image
-          command: |
-            echo "=========================================="
-            echo "Pushing UAT Docker Image"
-            echo "=========================================="
-
-            IMAGE_URI="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${UAT_ECR_REPOSITORY}:${CIRCLE_TAG}-${CIRCLE_BUILD_NUM}"
-
-            docker push "${IMAGE_URI}"
-
-      # ------------------------------------------------------
-      # Run UAT ECS
-      # ------------------------------------------------------
+            echo "UAT image:"
+            echo "${IMAGE_URI}:${IMAGE_TAG}"
 
       - run-ecs-task:
-          cluster-name: ecs-uat
+          cluster: ecs-uat
           task-definition-family: uat-task-definition
-          ecr-repository: ${UAT_ECR_REPOSITORY}
+          ecr-repository-env-var: UAT_ECR_REPOSITORY
           image-tag: ${CIRCLE_TAG}-${CIRCLE_BUILD_NUM}
+          subnet-ids: $SUBNET_IDS
+          security-group-id: $SECURITY_GROUP_ID
+          public-ip-status: $PUBLIC_IP_STATUS
           dbt-run-mode: STATE_AWARE
-          subnet-ids: ${SUBNET_IDS}
-          security-group-id: ${SECURITY_GROUP_ID}
 
 
   # ==========================================================
-  # PROD
+  # PROD RELEASE
+  # RC tag → approval → build → PROD ECR → PROD ECS
+  # STATE_AWARE
   # ==========================================================
 
   build-push-prod:
-
     machine:
       image: ubuntu-2204:current
 
     steps:
-
       - checkout
-
-      - install-dependencies
 
       - configure-aws-oidc
 
       - login-to-ecr
 
-      # ------------------------------------------------------
-      # Build PROD Docker Image
-      # ------------------------------------------------------
-
       - run:
-          name: Build PROD Docker Image
+          name: Build and push PROD image
           command: |
-            echo "=========================================="
-            echo "Building PROD Docker Image"
-            echo "=========================================="
 
-            IMAGE_URI="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${PROD_ECR_REPOSITORY}:${CIRCLE_TAG}-${CIRCLE_BUILD_NUM}"
+            IMAGE_URI="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${PROD_ECR_REPOSITORY}"
+            IMAGE_TAG="${CIRCLE_TAG}-${CIRCLE_BUILD_NUM}"
+
+            echo "Release: ${CIRCLE_TAG}"
 
             docker build \
-              -t "${IMAGE_URI}" \
+              --tag "${IMAGE_URI}:${IMAGE_TAG}" \
               .
 
-            echo "PROD Docker image built successfully."
+            docker push \
+              "${IMAGE_URI}:${IMAGE_TAG}"
 
-      # ------------------------------------------------------
-      # Push PROD Docker Image
-      # ------------------------------------------------------
-
-      - run:
-          name: Push PROD Docker Image
-          command: |
-            echo "=========================================="
-            echo "Pushing PROD Docker Image"
-            echo "=========================================="
-
-            IMAGE_URI="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${PROD_ECR_REPOSITORY}:${CIRCLE_TAG}-${CIRCLE_BUILD_NUM}"
-
-            docker push "${IMAGE_URI}"
-
-      # ------------------------------------------------------
-      # Run PROD ECS
-      # ------------------------------------------------------
+            echo "PROD image:"
+            echo "${IMAGE_URI}:${IMAGE_TAG}"
 
       - run-ecs-task:
-          cluster-name: ecs-prod
+          cluster: ecs-prod
           task-definition-family: prod-task-definition
-          ecr-repository: ${PROD_ECR_REPOSITORY}
+          ecr-repository-env-var: PROD_ECR_REPOSITORY
           image-tag: ${CIRCLE_TAG}-${CIRCLE_BUILD_NUM}
+          subnet-ids: $SUBNET_IDS
+          security-group-id: $SECURITY_GROUP_ID
+          public-ip-status: $PUBLIC_IP_STATUS
           dbt-run-mode: STATE_AWARE
-          subnet-ids: ${SUBNET_IDS}
-          security-group-id: ${SECURITY_GROUP_ID}
 
 
   # ==========================================================
   # DAILY PROD
+  # 02:00 UTC → PROD ECS → FULL DBT BUILD
+  #
+  # IMPORTANT:
+  # - No checkout
+  # - No Docker build
+  # - No ECR push
+  # - No previous manifest download
+  # - No state comparison
+  # - Uses existing PROD task definition
+  # - DBT_RUN_MODE=FULL
+  # - Updates manifest after successful build
   # ==========================================================
 
   run-prod-daily:
-
     machine:
       image: ubuntu-2204:current
 
     steps:
 
-      - checkout
-
-      - install-dependencies
-
       - configure-aws-oidc
 
-      # ------------------------------------------------------
-      # Run existing PROD task definition
-      # ------------------------------------------------------
-
       - run:
-          name: Daily PROD dbt Run
+          name: Run daily FULL dbt build on PROD ECS
           command: |
 
             echo "=========================================="
@@ -619,89 +374,74 @@ jobs:
             echo "FULL"
 
             # ------------------------------------------------
-            # Get latest PROD task definition
-            # ------------------------------------------------
-
-            TASK_DEF_ARN=$(aws ecs describe-task-definition \
-              --task-definition prod-task-definition \
-              --query 'taskDefinition.taskDefinitionArn' \
-              --output text)
-
-            echo "Using task definition:"
-            echo "${TASK_DEF_ARN}"
-
-            # ------------------------------------------------
-            # Run PROD ECS task
+            # Run existing PROD task definition.
+            #
+            # ECS resolves prod-task-definition to the latest
+            # ACTIVE revision.
+            #
+            # Only DBT_RUN_MODE is overridden for this run.
             # ------------------------------------------------
 
             TASK_ARN=$(aws ecs run-task \
               --cluster ecs-prod \
-              --task-definition "${TASK_DEF_ARN}" \
+              --task-definition prod-task-definition \
               --launch-type FARGATE \
-              --network-configuration \
-                "awsvpcConfiguration={
-                  subnets=[${SUBNET_IDS}],
-                  securityGroups=[${SECURITY_GROUP_ID}],
-                  assignPublicIp=ENABLED
-                }" \
-              --overrides \
-                '{
-                  "containerOverrides": [
-                    {
-                      "name": "dbt",
-                      "environment": [
-                        {
-                          "name": "DBT_RUN_MODE",
-                          "value": "FULL"
-                        }
-                      ]
-                    }
-                  ]
-                }' \
+              --network-configuration "awsvpcConfiguration={subnets=[$SUBNET_IDS],securityGroups=[$SECURITY_GROUP_ID],assignPublicIp=$PUBLIC_IP_STATUS}" \
+              --overrides '{
+                "containerOverrides": [
+                  {
+                    "name": "Main",
+                    "environment": [
+                      {
+                        "name": "DBT_RUN_MODE",
+                        "value": "FULL"
+                      }
+                    ]
+                  }
+                ]
+              }' \
               --query 'tasks[0].taskArn' \
               --output text)
 
-            echo "Started task:"
+            if [ -z "$TASK_ARN" ] || [ "$TASK_ARN" = "None" ]; then
+              echo "ERROR: ecs run-task did not return a task ARN"
+              exit 1
+            fi
+
+            echo "Started PROD ECS task:"
             echo "${TASK_ARN}"
 
             # ------------------------------------------------
-            # Wait
+            # Wait for ECS task
             # ------------------------------------------------
+
+            echo "Waiting for PROD ECS task to finish..."
 
             aws ecs wait tasks-stopped \
               --cluster ecs-prod \
-              --tasks "${TASK_ARN}"
-
-            echo "PROD task stopped."
+              --tasks "$TASK_ARN"
 
             # ------------------------------------------------
-            # Check exit code
+            # Get container exit code
             # ------------------------------------------------
 
             EXIT_CODE=$(aws ecs describe-tasks \
               --cluster ecs-prod \
-              --tasks "${TASK_ARN}" \
+              --tasks "$TASK_ARN" \
               --query 'tasks[0].containers[0].exitCode' \
               --output text)
 
-            STOPPED_REASON=$(aws ecs describe-tasks \
-              --cluster ecs-prod \
-              --tasks "${TASK_ARN}" \
-              --query 'tasks[0].stoppedReason' \
-              --output text)
+            echo "=========================================="
+            echo "PROD dbt Exit Code: ${EXIT_CODE}"
+            echo "=========================================="
 
-            echo "Exit Code:"
-            echo "${EXIT_CODE}"
-
-            echo "Stopped Reason:"
-            echo "${STOPPED_REASON}"
-
-            if [ "${EXIT_CODE}" != "0" ]; then
-              echo "Daily PROD dbt task failed."
+            if [ "$EXIT_CODE" != "0" ]; then
+              echo "ERROR: Daily PROD dbt execution failed."
+              echo "Check ECS task and CloudWatch Logs."
               exit 1
             fi
 
-            echo "Daily PROD dbt task completed successfully."
+            echo "Daily FULL PROD dbt execution completed successfully."
 
 
 # ============================================================
@@ -711,94 +451,106 @@ jobs:
 workflows:
 
   # ==========================================================
-  # MAIN DEPLOYMENT WORKFLOW
+  # QA WORKFLOW
   # ==========================================================
 
-  deployment:
-
+  qa:
     jobs:
 
-      # ------------------------------------------------------
-      # QA
-      #
-      # Runs automatically after merge to main.
-      # ------------------------------------------------------
-
       - build-push-qa:
+          context: us-dbt
           filters:
             branches:
               only:
                 - main
 
-      # ------------------------------------------------------
-      # UAT
-      #
-      # Triggered by release tag and requires approval.
-      # ------------------------------------------------------
-
-      - hold-uat:
-          type: approval
-          requires:
-            - build-push-qa
-          filters:
             tags:
-              only: /^v.*/
+              ignore: /.*/
 
+
+  # ==========================================================
+  # RELEASE CANDIDATE WORKFLOW
+  # ==========================================================
+
+  release-candidate:
+    jobs:
+
+      - approve-uat:
+          type: approval
+          filters: &rc-tag-only
             branches:
               ignore: /.*/
+
+            tags:
+              only: /^v\d+\.\d+\.\d+-rc-\d+$/
 
       - build-push-uat:
           requires:
-            - hold-uat
+            - approve-uat
+
+          context: us-dbt
 
           filters:
-            tags:
-              only: /^v.*/
+            <<: *rc-tag-only
 
-            branches:
-              ignore: /.*/
-
-
-      # ------------------------------------------------------
-      # PROD
-      #
-      # Runs only after UAT approval/job succeeds.
-      # ------------------------------------------------------
-
-      - hold-prod:
+      - approve-prod:
           type: approval
+
           requires:
             - build-push-uat
 
           filters:
-            tags:
-              only: /^v.*/
-
-            branches:
-              ignore: /.*/
+            <<: *rc-tag-only
 
       - build-push-prod:
           requires:
-            - hold-prod
+            - approve-prod
+
+          context: us-dbt
 
           filters:
-            tags:
-              only: /^v.*/
-
-            branches:
-              ignore: /.*/
+            <<: *rc-tag-only
 
 
   # ==========================================================
-  # DAILY PROD WORKFLOW
+  # DAILY PROD DBT WORKFLOW
+  # ==========================================================
+  #
+  # Runs every day at:
+  #
+  #   02:00 UTC
+  #   07:30 AM IST
+  #
+  # This workflow ONLY runs run-prod-daily.
+  #
+  # It does NOT:
+  #   - Run QA
+  #   - Run UAT
+  #   - Build Docker image
+  #   - Push to ECR
+  #   - Create a release tag
+  #   - Perform state comparison
+  #
+  # The ECS container receives:
+  #
+  #   DBT_RUN_MODE=FULL
+  #
+  # Therefore the container executes:
+  #
+  #   dbt build
+  #
+  # After successful execution, the container uploads the
+  # newly generated manifest.json and replaces the existing
+  # PROD manifest in S3.
+  #
   # ==========================================================
 
   daily-prod:
-
     triggers:
 
       - schedule:
           cron: "10 7 * * *"
+
           filters:
             branches:
               only:
@@ -807,7 +559,4 @@ workflows:
     jobs:
 
       - run-prod-daily:
-          filters:
-            branches:
-              only:
-                - main
+          context: us-dbt
