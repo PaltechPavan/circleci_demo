@@ -1,9 +1,8 @@
 # ============================================================
-# DBT Docker Image
+# QA DBT Docker Image
 # ============================================================
 
 FROM python:3.11-slim
-
 
 # ------------------------------------------------------------
 # Environment
@@ -13,9 +12,7 @@ ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV DBT_PROFILES_DIR=/app
 
-
 WORKDIR /app
-
 
 # ------------------------------------------------------------
 # System dependencies
@@ -30,7 +27,6 @@ RUN apt-get update && \
         jq && \
     rm -rf /var/lib/apt/lists/*
 
-
 # ------------------------------------------------------------
 # AWS CLI v2
 # ------------------------------------------------------------
@@ -42,7 +38,6 @@ RUN curl -fsSL \
     /tmp/aws/install && \
     rm -rf /tmp/aws /tmp/awscliv2.zip
 
-
 # ------------------------------------------------------------
 # Python dependencies
 # ------------------------------------------------------------
@@ -50,7 +45,6 @@ RUN curl -fsSL \
 COPY requirements.txt .
 
 RUN pip install --no-cache-dir -r requirements.txt
-
 
 # ------------------------------------------------------------
 # Copy dbt project
@@ -68,11 +62,9 @@ RUN cat <<'EOF' > /app/entrypoint.sh
 
 set -euo pipefail
 
-
 echo "=========================================="
-echo "DBT ECS TASK"
+echo "QA DBT ECS TASK"
 echo "=========================================="
-
 
 # ============================================================
 # Environment variables
@@ -82,12 +74,8 @@ ENVIRONMENT="${ENVIRONMENT:-}"
 DBT_STATE_BUCKET="${DBT_STATE_BUCKET:-}"
 DBT_RUN_MODE="${DBT_RUN_MODE:-STATE_AWARE}"
 
-# Optional dbt docs bucket.
-#
-# QA will provide this variable.
-# UAT/PROD can leave it unset until their docs setup is added.
+# New QA docs bucket
 DBT_DOCS_BUCKET="${DBT_DOCS_BUCKET:-}"
-
 
 echo "Environment:"
 echo "${ENVIRONMENT}"
@@ -98,46 +86,34 @@ echo "${DBT_STATE_BUCKET}"
 echo "DBT Run Mode:"
 echo "${DBT_RUN_MODE}"
 
-if [ -n "${DBT_DOCS_BUCKET}" ]; then
-    echo "DBT Docs Bucket:"
-    echo "${DBT_DOCS_BUCKET}"
-else
-    echo "DBT Docs Bucket:"
-    echo "Not configured"
-fi
-
+echo "DBT Docs Bucket:"
+echo "${DBT_DOCS_BUCKET}"
 
 # ============================================================
 # Validate required variables
 # ============================================================
 
 if [ -z "${ENVIRONMENT}" ]; then
-
     echo "ERROR: ENVIRONMENT is not set"
-
     exit 1
-
 fi
-
 
 if [ -z "${DBT_STATE_BUCKET}" ]; then
-
     echo "ERROR: DBT_STATE_BUCKET is not set"
-
     exit 1
-
 fi
 
+if [ -z "${DBT_DOCS_BUCKET}" ]; then
+    echo "ERROR: DBT_DOCS_BUCKET is not set"
+    exit 1
+fi
 
 if [ "${DBT_RUN_MODE}" != "STATE_AWARE" ] && \
    [ "${DBT_RUN_MODE}" != "FULL" ]; then
 
     echo "ERROR: DBT_RUN_MODE must be STATE_AWARE or FULL"
-
     exit 1
-
 fi
-
 
 # ============================================================
 # Paths
@@ -146,7 +122,6 @@ fi
 STATE_PATH="s3://${DBT_STATE_BUCKET}/${ENVIRONMENT}/manifest.json"
 
 LOCAL_STATE_DIR="/tmp/dbt-state"
-
 LOCAL_STATE_MANIFEST="${LOCAL_STATE_DIR}/manifest.json"
 
 DOCS_DIR="/app/target"
@@ -168,11 +143,8 @@ echo "Versions"
 echo "=========================================="
 
 python --version
-
 dbt --version
-
 aws --version
-
 
 # ============================================================
 # AWS identity
@@ -184,7 +156,6 @@ echo "=========================================="
 
 aws sts get-caller-identity
 
-
 # ============================================================
 # dbt deps
 # ============================================================
@@ -195,7 +166,6 @@ echo "=========================================="
 
 dbt deps
 
-
 # ============================================================
 # dbt debug
 # ============================================================
@@ -205,7 +175,6 @@ echo "Running dbt debug"
 echo "=========================================="
 
 dbt debug
-
 
 # ============================================================
 # STATE AWARE MODE
@@ -218,32 +187,24 @@ if [ "${DBT_RUN_MODE}" = "STATE_AWARE" ]; then
     echo "=========================================="
 
     echo "Checking previous manifest:"
-
     echo "${STATE_PATH}"
-
 
     if aws s3api head-object \
         --bucket "${DBT_STATE_BUCKET}" \
         --key "${ENVIRONMENT}/manifest.json" \
         >/dev/null 2>&1; then
 
-
         echo "Previous manifest found."
 
-
         echo "Downloading previous manifest..."
-
 
         aws s3 cp \
             "${STATE_PATH}" \
             "${LOCAL_STATE_MANIFEST}"
 
-
         echo "Previous manifest downloaded."
 
-
         ls -lh "${LOCAL_STATE_MANIFEST}"
-
 
         # ----------------------------------------------------
         # Parse current project
@@ -254,7 +215,6 @@ if [ "${DBT_RUN_MODE}" = "STATE_AWARE" ]; then
         echo "=========================================="
 
         dbt parse
-
 
         # ----------------------------------------------------
         # Incremental/state-aware build
@@ -268,21 +228,17 @@ if [ "${DBT_RUN_MODE}" = "STATE_AWARE" ]; then
             --select state:modified+ \
             --state "${LOCAL_STATE_DIR}"
 
-
     else
 
         echo "No previous manifest found."
 
         echo "Running full dbt build."
 
-
         dbt parse
 
         dbt build
 
-
     fi
-
 
 # ============================================================
 # FULL MODE
@@ -294,14 +250,11 @@ else
     echo "FULL MODE"
     echo "=========================================="
 
-
     dbt parse
 
     dbt build
 
-
 fi
-
 
 # ============================================================
 # DBT BUILD SUCCESS
@@ -311,7 +264,6 @@ echo "=========================================="
 echo "DBT BUILD COMPLETED"
 echo "=========================================="
 
-
 # ============================================================
 # Generate dbt docs
 # ============================================================
@@ -320,125 +272,49 @@ echo "=========================================="
 echo "Generating dbt docs"
 echo "=========================================="
 
-
 dbt docs generate
-
 
 echo "dbt docs generated successfully."
 
-
-# ============================================================
-# Show generated dbt docs files
-# ============================================================
-
 echo "=========================================="
-echo "Generated dbt target files"
+echo "Uploading dbt docs to QA S3"
 echo "=========================================="
 
+aws s3 sync \
+  "/app/target/" \
+  "s3://${DBT_DOCS_BUCKET}/qa/" \
+  --delete
 
-find /app/target -maxdepth 3 -type f -print
+echo "dbt docs uploaded successfully"
+echo "Docs URL:"
+echo "https://${DBT_DOCS_BUCKET}.s3.${AWS_REGION}.amazonaws.com/qa/index.html"
+
 
 
 # ============================================================
-# Upload dbt state manifest
+# Upload manifest for future state-aware runs
 # ============================================================
 
 echo "=========================================="
 echo "Uploading dbt state manifest"
 echo "=========================================="
 
-
 aws s3 cp \
     "/app/target/manifest.json" \
     "${STATE_PATH}"
 
-
 echo "Manifest uploaded successfully."
 
 
-# ============================================================
-# Upload complete dbt docs to S3
-# ============================================================
-
-if [ -n "${DBT_DOCS_BUCKET}" ]; then
-
-    echo "=========================================="
-    echo "Uploading dbt docs to S3"
-    echo "=========================================="
-
-    QA_DOCS_PREFIX="qa/"
-
-
-    echo "Docs bucket:"
-    echo "${DBT_DOCS_BUCKET}"
-
-
-    echo "Docs prefix:"
-    echo "${QA_DOCS_PREFIX}"
-
-
-    echo "Source:"
-    echo "${DOCS_DIR}/"
-
-
-    echo "Destination:"
-    echo "s3://${DBT_DOCS_BUCKET}/${QA_DOCS_PREFIX}"
-
-
-    # --------------------------------------------------------
-    # Upload the complete dbt docs generated by
-    # `dbt docs generate`
-    # --------------------------------------------------------
-
-    aws s3 sync \
-        "${DOCS_DIR}/" \
-        "s3://${DBT_DOCS_BUCKET}/${QA_DOCS_PREFIX}" \
-        --delete
-
-
-    echo "=========================================="
-    echo "DBT DOCS UPLOAD COMPLETED"
-    echo "=========================================="
-
-
-    echo "S3 location:"
-    echo "s3://${DBT_DOCS_BUCKET}/${QA_DOCS_PREFIX}"
-
-
-    echo ""
-    echo "DBT docs URL:"
-    echo "https://${DBT_DOCS_BUCKET}.s3.${AWS_DEFAULT_REGION}.amazonaws.com/qa/index.html"
-
-
-else
-
-    echo "=========================================="
-    echo "DBT DOCS S3 UPLOAD SKIPPED"
-    echo "=========================================="
-
-    echo "DBT_DOCS_BUCKET is not configured."
-
-    echo "Continuing without uploading dbt docs."
-
-fi
-
-
-# ============================================================
-# SUCCESS
-# ============================================================
 
 echo "=========================================="
 echo "DBT EXECUTION COMPLETED SUCCESSFULLY"
 echo "=========================================="
 
-
 exit 0
-
 EOF
 
-
 RUN chmod +x /app/entrypoint.sh
-
 
 # ------------------------------------------------------------
 # Entrypoint
