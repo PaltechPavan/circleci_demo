@@ -60,6 +60,7 @@ commands:
       by the deployment and run it as a one-off ECS Fargate task.
 
     parameters:
+
       cluster:
         type: string
 
@@ -116,16 +117,16 @@ commands:
 
             NEW_TASK_DEF_JSON=$(aws ecs describe-task-definition \
               --task-definition "<<parameters.task-definition-family>>" \
-              --query 'taskDefinition' | \
+              --query 'taskDefinition' |
               jq --arg IMAGE "$IMAGE_URI" \
                  --arg RUN_MODE "<<parameters.dbt-run-mode>>" \
-                '.containerDefinitions[0].image = $IMAGE
-                 | .containerDefinitions[0].environment =
+                 '.containerDefinitions[0].image = $IMAGE
+                  | .containerDefinitions[0].environment =
                    ((.containerDefinitions[0].environment // [])
                     | map(select(.name != "DBT_RUN_MODE"))
                     + [{"name":"DBT_RUN_MODE","value":$RUN_MODE}])
-                 | del(.taskDefinitionArn, .revision, .status, .requiresAttributes,
-                       .compatibilities, .registeredAt, .registeredBy)')
+                  | del(.taskDefinitionArn, .revision, .status, .requiresAttributes,
+                        .compatibilities, .registeredAt, .registeredBy)')
 
             # ------------------------------------------------
             # Register new task definition revision
@@ -205,6 +206,7 @@ jobs:
       image: ubuntu-2204:current
 
     steps:
+
       - checkout
 
       - configure-aws-oidc
@@ -238,6 +240,37 @@ jobs:
           public-ip-status: $PUBLIC_IP_STATUS
           dbt-run-mode: STATE_AWARE
 
+      # ======================================================
+      # DBT DOCS - QA ONLY
+      # ======================================================
+
+      - run:
+          name: Verify QA dbt Docs
+          command: |
+            echo "=========================================="
+            echo "Verifying QA dbt Docs"
+            echo "=========================================="
+
+            aws s3api head-object \
+              --bucket "${QA_DOCS_BUCKET}" \
+              --key "qa/index.html"
+
+            echo ""
+            echo "QA dbt docs object exists."
+
+      - run:
+          name: Display QA dbt Docs URL
+          command: |
+            echo "=========================================="
+            echo "QA DBT DOCS URL"
+            echo "=========================================="
+            echo ""
+
+            echo "https://${QA_DOCS_BUCKET}.s3.${AWS_REGION}.amazonaws.com/qa/index.html"
+
+            echo ""
+            echo "=========================================="
+
 
   # ==========================================================
   # UAT
@@ -250,6 +283,7 @@ jobs:
       image: ubuntu-2204:current
 
     steps:
+
       - checkout
 
       - configure-aws-oidc
@@ -297,6 +331,7 @@ jobs:
       image: ubuntu-2204:current
 
     steps:
+
       - checkout
 
       - configure-aws-oidc
@@ -335,17 +370,6 @@ jobs:
 
   # ==========================================================
   # DAILY PROD
-  # 02:00 UTC → PROD ECS → FULL DBT BUILD
-  #
-  # IMPORTANT:
-  # - No checkout
-  # - No Docker build
-  # - No ECR push
-  # - No previous manifest download
-  # - No state comparison
-  # - Uses existing PROD task definition
-  # - DBT_RUN_MODE=FULL
-  # - Updates manifest after successful build
   # ==========================================================
 
   run-prod-daily:

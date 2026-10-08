@@ -62,36 +62,57 @@ echo "Environment : ${ENVIRONMENT}"
 echo "Run Mode    : ${DBT_RUN_MODE}"
 echo "State Bucket: ${DBT_STATE_BUCKET}"
 
+DBT_DOCS_BUCKET="${DBT_DOCS_BUCKET}"
+
+echo "Docs Bucket : ${DBT_DOCS_BUCKET}"
+
 # ============================================================
 # 1. Basic configuration
 # ============================================================
 
 if [ -z "${ENVIRONMENT}" ]; then
+
     echo "ERROR: ENVIRONMENT is not set"
+
     exit 1
+
 fi
 
 if [ -z "${DBT_STATE_BUCKET}" ]; then
+
     echo "ERROR: DBT_STATE_BUCKET is not set"
+
     exit 1
+
 fi
 
 if [ -z "${DBT_RUN_MODE}" ]; then
+
     echo "ERROR: DBT_RUN_MODE is not set"
+
     echo "Expected values: STATE_AWARE or FULL"
+
     exit 1
+
 fi
 
 if [ "${DBT_RUN_MODE}" != "STATE_AWARE" ] && \
    [ "${DBT_RUN_MODE}" != "FULL" ]; then
+
     echo "ERROR: Invalid DBT_RUN_MODE: ${DBT_RUN_MODE}"
+
     echo "Expected values: STATE_AWARE or FULL"
+
     exit 1
+
 fi
 
 STATE_KEY="${ENVIRONMENT}/manifest.json"
+
 STATE_S3_PATH="s3://${DBT_STATE_BUCKET}/${STATE_KEY}"
+
 STATE_DIR="/tmp/dbt-state"
+
 STATE_MANIFEST="${STATE_DIR}/manifest.json"
 
 mkdir -p "${STATE_DIR}"
@@ -106,7 +127,8 @@ echo "State S3 path   : ${STATE_S3_PATH}"
 echo "State directory : ${STATE_DIR}"
 
 # ============================================================
-# 2. Install dbt packages
+# Create directories
+#
 # ============================================================
 
 echo "========================================"
@@ -136,7 +158,9 @@ if [ "${DBT_RUN_MODE}" = "STATE_AWARE" ]; then
     # ========================================================
 
     echo "========================================"
+
     echo "STATE-AWARE MODE"
+
     echo "========================================"
 
     echo "Checking previous dbt state..."
@@ -145,10 +169,13 @@ if [ "${DBT_RUN_MODE}" = "STATE_AWARE" ]; then
         --bucket "${DBT_STATE_BUCKET}" \
         --key "${STATE_KEY}" \
         >/dev/null 2>&1
+
     then
 
         echo "Previous state FOUND"
+
         echo "Previous manifest:"
+
         echo "${STATE_S3_PATH}"
 
         # ----------------------------------------------------
@@ -156,24 +183,31 @@ if [ "${DBT_RUN_MODE}" = "STATE_AWARE" ]; then
         # ----------------------------------------------------
 
         MAX_ATTEMPTS=3
+
         ATTEMPT=1
+
         DOWNLOAD_SUCCESS="false"
 
         while [ "${ATTEMPT}" -le "${MAX_ATTEMPTS}" ]; do
 
             echo "----------------------------------------"
+
             echo "Downloading previous manifest"
+
             echo "Attempt ${ATTEMPT}/${MAX_ATTEMPTS}"
+
             echo "----------------------------------------"
 
             if aws s3 cp \
                 "${STATE_S3_PATH}" \
                 "${STATE_MANIFEST}"
+
             then
 
                 echo "Previous manifest downloaded successfully."
 
                 DOWNLOAD_SUCCESS="true"
+
                 break
 
             else
@@ -181,8 +215,11 @@ if [ "${DBT_RUN_MODE}" = "STATE_AWARE" ]; then
                 echo "WARNING: Failed to download previous manifest."
 
                 if [ "${ATTEMPT}" -lt "${MAX_ATTEMPTS}" ]; then
+
                     echo "Retrying in 10 seconds..."
+
                     sleep 10
+
                 fi
 
             fi
@@ -198,21 +235,27 @@ if [ "${DBT_RUN_MODE}" = "STATE_AWARE" ]; then
         if [ "${DOWNLOAD_SUCCESS}" != "true" ]; then
 
             echo "========================================"
+
             echo "ERROR: Previous manifest download failed"
+
             echo "========================================"
 
             echo "Manifest exists in S3, but it could not"
+
             echo "be downloaded after ${MAX_ATTEMPTS} attempts."
 
             echo "S3 path:"
+
             echo "${STATE_S3_PATH}"
 
             echo "Stopping state-aware execution."
 
             exit 1
+
         fi
 
         echo "Previous manifest downloaded:"
+
         ls -lh "${STATE_MANIFEST}"
 
         HAS_PREVIOUS_STATE="true"
@@ -220,6 +263,7 @@ if [ "${DBT_RUN_MODE}" = "STATE_AWARE" ]; then
     else
 
         echo "No previous state found."
+
         echo "Running FULL dbt build for first deployment."
 
         HAS_PREVIOUS_STATE="false"
@@ -231,12 +275,15 @@ if [ "${DBT_RUN_MODE}" = "STATE_AWARE" ]; then
     # --------------------------------------------------------
 
     echo "========================================"
+
     echo "Generating current dbt manifest"
+
     echo "========================================"
 
     dbt parse
 
     echo "Current manifest:"
+
     ls -lh target/manifest.json
 
     # --------------------------------------------------------
@@ -246,10 +293,13 @@ if [ "${DBT_RUN_MODE}" = "STATE_AWARE" ]; then
     if [ "${HAS_PREVIOUS_STATE}" = "true" ]; then
 
         echo "========================================"
+
         echo "Running STATE-AWARE dbt build"
+
         echo "========================================"
 
         echo "Selection:"
+
         echo "state:modified+"
 
         dbt build \
@@ -259,7 +309,9 @@ if [ "${DBT_RUN_MODE}" = "STATE_AWARE" ]; then
     else
 
         echo "========================================"
+
         echo "Running FULL dbt build"
+
         echo "========================================"
 
         dbt build
@@ -273,11 +325,15 @@ else
     # ========================================================
 
     echo "========================================"
+
     echo "FULL MODE"
+
     echo "========================================"
 
     echo "Daily PROD execution."
+
     echo "Previous manifest will NOT be downloaded."
+
     echo "State comparison will NOT be performed."
 
     # --------------------------------------------------------
@@ -285,12 +341,15 @@ else
     # --------------------------------------------------------
 
     echo "========================================"
+
     echo "Generating current dbt manifest"
+
     echo "========================================"
 
     dbt parse
 
     echo "Current manifest:"
+
     ls -lh target/manifest.json
 
     # --------------------------------------------------------
@@ -298,10 +357,13 @@ else
     # --------------------------------------------------------
 
     echo "========================================"
+
     echo "Running FULL dbt build"
+
     echo "========================================"
 
     echo "Selection:"
+
     echo "ALL enabled dbt models"
 
     dbt build
@@ -317,6 +379,7 @@ echo "dbt build SUCCESS"
 echo "========================================"
 
 echo "Current manifest:"
+
 ls -lh target/manifest.json
 
 # ============================================================
@@ -329,9 +392,11 @@ echo "Updating dbt state in S3"
 echo "========================================"
 
 echo "Uploading:"
+
 echo "target/manifest.json"
 
 echo "To:"
+
 echo "${STATE_S3_PATH}"
 
 aws s3 cp \
@@ -343,11 +408,40 @@ echo "DBT STATE UPDATED SUCCESSFULLY"
 echo "========================================"
 
 echo "State location:"
+
 echo "${STATE_S3_PATH}"
+
+# ============================================================
+# DBT DOCS - QA ONLY
+# ============================================================
+
+if [ "${ENVIRONMENT}" = "qa" ] && [ -n "${DBT_DOCS_BUCKET}" ]; then
+
+    echo "========================================"
+    echo "Generating dbt docs"
+    echo "========================================"
+
+    dbt docs generate
+
+    echo "========================================"
+    echo "Uploading dbt docs to S3"
+    echo "========================================"
+
+    aws s3 sync \
+        target/ \
+        "s3://${DBT_DOCS_BUCKET}/qa/" \
+        --delete
+
+    echo "========================================"
+    echo "DBT DOCS UPLOAD SUCCESSFUL"
+    echo "========================================"
+
+fi
 
 echo "========================================"
 echo "dbt execution completed successfully"
 echo "========================================"
+
 EOF
 
 # ============================================================
